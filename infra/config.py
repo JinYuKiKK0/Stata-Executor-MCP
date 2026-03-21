@@ -5,15 +5,11 @@ from pathlib import Path
 from typing import Literal
 
 
-BackendType = Literal["subprocess", "pystata"]
-
-
 @dataclass(slots=True)
 class StataConfig:
     """Static runner configuration shared by all Stata jobs."""
 
     edition: Literal["mp", "se", "be"] = "mp"
-    backend: BackendType = "subprocess"
     stata_path: str | None = None
     working_dir: Path = Path.cwd()
     job_root: Path = Path("logs/jobs")

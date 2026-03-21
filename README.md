@@ -1,12 +1,13 @@
-# StataAgent 执行基础设施 V2
+# StataAgent 执行基础设施
 
-该模块现在是作业型执行器，而不是进程内交互式 `StataEngine`。
+该模块现在只保留一种执行方式：子进程调用本机 Stata。
 
-核心目标：
+设计原则：
 
 - 每次执行都是独立 job
-- 默认使用可监督的子进程 Stata backend
-- 对上层返回结构化 manifest，而不是原始日志字符串
+- `JobResult` 只描述执行事实，不判断经济学结果是否“合理”
+- `run.log` 是主执行日志
+- 外层 batch/process 日志会尽量去重；不能去重时，会被收敛进当前 `job_dir`
 
 ## 公开接口
 
@@ -19,14 +20,14 @@
 
 ### `StataConfig`
 
-静态配置，定义默认 backend、Stata 路径、工作目录和 job 根目录。
+静态配置，定义 Stata 路径、工作目录和 job 根目录。
 
 关键字段：
 
-- `backend`: `subprocess` 或 `pystata`
-- `stata_path`: Stata 可执行文件路径，或安装目录
-- `working_dir`: 相对输入输出的基准目录
-- `job_root`: 每次 job 的独立落盘目录
+- `edition`
+- `stata_path`
+- `working_dir`
+- `job_root`
 - `default_timeout_sec`
 - `artifact_globs`
 - `env_overrides`
@@ -50,12 +51,19 @@
 - `error_kind`
 - `summary`
 - `job_dir`
-- `log_path`
+- `run_log_path`
+- `process_log_path`
 - `log_tail`
 - `artifacts`
 - `elapsed_ms`
-- `backend`
 - `working_dir`
+
+`JobResult` 只回答这些问题：
+
+- do 文件有没有完整跑完
+- 退出码是多少
+- 报错发生在输入、启动、执行还是产物收集阶段
+- 主日志和外层进程日志分别在哪里
 
 ## Python 调用
 
@@ -66,7 +74,6 @@ from infra import JobSpec, StataConfig, StataJobRunner
 
 runner = StataJobRunner(
     StataConfig(
-        backend="subprocess",
         edition="mp",
         stata_path="D:/Program Files/Stata17/StataMP-64.exe",
         working_dir=Path.cwd(),
@@ -84,7 +91,8 @@ result = runner.run_do(
 
 print(result.status, result.exit_code, result.error_kind)
 print(result.summary)
-print(result.job_dir)
+print(result.run_log_path)
+print(result.process_log_path)
 print(result.log_tail)
 ```
 
@@ -105,8 +113,7 @@ result = runner.run_inline(
 ### 执行 do 文件
 
 ```bash
-python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis.do ^
-  --backend subprocess ^
+python main.py run-do ./path/to/analysis.do ^
   --stata-path "D:/Program Files/Stata17/StataMP-64.exe" ^
   --working-dir . ^
   --artifact-glob "output/**/*.rtf"
@@ -121,7 +128,7 @@ python main.py run-inline "sysuse auto, clear" --stata-path "D:/Program Files/St
 ### 机器调用
 
 ```bash
-python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis.do --stata-path "D:/Program Files/Stata17/StataMP-64.exe" --json
+python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata17/StataMP-64.exe" --json
 ```
 
 失败时 CLI 会返回非零退出码；标准输出始终是 `JobResult` JSON。
@@ -135,28 +142,20 @@ python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis
 - `run.log`
 - `result.json`
 
-这样上层 Agent 可以直接基于 manifest 做错误修复，不必再依赖“最后一次日志”这类共享状态。
+另外：
 
-## Backend 说明
+- 如果 Stata 额外生成了外层 batch/process 日志，runner 会先尝试和 `run.log` 去重
+- 如果无法安全去重，这份日志会被保存为 `process.log`
+- `result.json` 会显式区分 `run_log_path` 和 `process_log_path`
 
-### `subprocess`
+## 可执行文件解析
 
-默认 backend。
+当 `stata_path` 指向安装目录或某个 Stata 可执行文件时，runner 会优先在同目录里寻找更像 batch/headless 入口的可执行文件，再回退到普通 GUI 可执行文件。
 
-优点：
+这意味着：
 
-- 有真实超时终止能力
-- job 级隔离更清晰
-- 更适合作为 Skill/MCP 底座
-
-### `pystata`
-
-仅保留为兼容/调试 backend。
-
-限制：
-
-- 无法提供真正的抢占式 timeout
-- 更容易受进程内状态影响
+- 如果本机只有 `StataMP-64.exe`，runner 仍会使用它
+- 如果将来安装目录里同时存在 console/batch 入口，runner 会优先选它们
 
 ## 测试
 
@@ -168,10 +167,10 @@ python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis
 - 语法/命令错误摘要
 - timeout
 - job 隔离
+- 外层 process log 收敛进 `job_dir`
 
 运行方式：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
-

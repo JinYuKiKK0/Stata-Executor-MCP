@@ -1,8 +1,7 @@
-from .config import BackendType, StataConfig
+from .config import StataConfig
 from .stata_engine import ErrorKind, JobPhase, JobResult, JobSpec, JobStatus, StataJobRunner
 
 __all__ = [
-    "BackendType",
     "ErrorKind",
     "JobPhase",
     "JobResult",

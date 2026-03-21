@@ -10,18 +10,11 @@ from infra import JobSpec, StataConfig, StataJobRunner
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--backend",
-        type=str,
-        default="subprocess",
-        choices=["subprocess", "pystata"],
-        help="Execution backend. Use subprocess for supervised jobs, pystata for debugging.",
-    )
-    parser.add_argument(
         "--edition",
         type=str,
         default="mp",
         choices=["mp", "se", "be"],
-        help="Stata edition used to resolve the executable or initialize pystata.",
+        help="Stata edition used to resolve the executable.",
     )
     parser.add_argument(
         "--stata-path",
@@ -45,7 +38,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--timeout-sec",
         type=int,
         default=None,
-        help="Hard timeout in seconds for subprocess jobs.",
+        help="Hard timeout in seconds for one Stata job.",
     )
     parser.add_argument(
         "--artifact-glob",
@@ -114,7 +107,6 @@ def main() -> None:
 
     config = StataConfig(
         edition=args.edition,
-        backend=args.backend,
         stata_path=args.stata_path,
         working_dir=working_dir,
         job_root=job_root,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import textwrap
 import sys
+import textwrap
 import unittest
 import uuid
 
@@ -27,8 +27,9 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.phase, "input")
         self.assertEqual(result.error_kind, "input_error")
-        result_path = Path(result.job_dir) / "result.json"
-        self.assertTrue(result_path.exists())
+        self.assertIsNone(result.run_log_path)
+        self.assertIsNone(result.process_log_path)
+        self.assertTrue((Path(result.job_dir) / "result.json").exists())
 
     def test_bootstrap_error_when_executable_cannot_be_resolved(self) -> None:
         root = self._workspace_case_dir()
@@ -45,8 +46,29 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.phase, "bootstrap")
         self.assertEqual(result.error_kind, "bootstrap_error")
+        self.assertIsNone(result.process_log_path)
 
-    def test_run_do_resolves_relative_paths_from_working_dir_and_collects_artifacts(self) -> None:
+    def test_executable_resolution_prefers_headless_candidate(self) -> None:
+        root = self._workspace_case_dir()
+        install_dir = root / "stata17"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        gui = install_dir / "StataMP-64.exe"
+        headless = install_dir / "StataMP-console.exe"
+        gui.write_text("", encoding="utf-8")
+        headless.write_text("", encoding="utf-8")
+        runner = StataJobRunner(
+            StataConfig(
+                stata_path=str(install_dir),
+                working_dir=root / "wd",
+                job_root=root / "jobs",
+            )
+        )
+
+        resolved = runner._resolve_subprocess_executable()
+
+        self.assertEqual(resolved, headless.resolve())
+
+    def test_run_do_resolves_relative_paths_and_collects_process_log_in_job_dir(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
         working_dir = root / "workspace"
@@ -74,6 +96,10 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertTrue((Path(result.job_dir) / "input.do").exists())
         self.assertTrue((Path(result.job_dir) / "wrapper.do").exists())
         self.assertTrue((Path(result.job_dir) / "result.json").exists())
+        self.assertEqual(Path(result.run_log_path).parent, Path(result.job_dir))
+        self.assertEqual(Path(result.process_log_path).parent, Path(result.job_dir))
+        self.assertFalse((root / "wrapper.log").exists())
+        self.assertFalse((working_dir / "wrapper.log").exists())
 
     def test_run_inline_returns_parse_error_summary(self) -> None:
         root = self._workspace_case_dir()
@@ -91,7 +117,7 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.error_kind, "stata_parse_or_command_error")
         self.assertIn("command foo is unrecognized", result.summary)
-        self.assertNotEqual(result.summary.strip(), "Stata failed with exit_code=199: r(199);")
+        self.assertNotEqual(result.summary.strip(), "Stata execution failed with exit_code=199: r(199);")
 
     def test_timeout_terminates_subprocess_and_next_job_is_clean(self) -> None:
         root = self._workspace_case_dir()
@@ -138,6 +164,8 @@ class StataJobRunnerTests(unittest.TestCase):
         second_manifest = json.loads((Path(second.job_dir) / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(first_manifest["status"], "succeeded")
         self.assertEqual(second_manifest["status"], "succeeded")
+        self.assertIn("run_log_path", first_manifest)
+        self.assertIn("process_log_path", second_manifest)
 
     def _create_fake_stata_executable(self, root: Path) -> Path:
         fake_py = root / "fake_stata.py"
@@ -154,17 +182,17 @@ class StataJobRunnerTests(unittest.TestCase):
 
                 def parse_wrapper(path: Path) -> tuple[Path, Path, Path]:
                     text = path.read_text(encoding="utf-8")
-                    log_match = re.search(r'log using "([^"]+)"', text)
+                    run_log_match = re.search(r'log using "([^"]+)"', text)
                     cwd_match = re.search(r'cd "([^"]+)"', text)
                     do_match = re.search(r'do "([^"]+)"', text)
-                    if not log_match or not cwd_match or not do_match:
+                    if not run_log_match or not cwd_match or not do_match:
                         raise RuntimeError("wrapper format changed")
-                    return Path(log_match.group(1)), Path(cwd_match.group(1)), Path(do_match.group(1))
+                    return Path(run_log_match.group(1)), Path(cwd_match.group(1)), Path(do_match.group(1))
 
 
                 def main() -> int:
                     wrapper = Path(sys.argv[-1])
-                    log_path, working_dir, input_do = parse_wrapper(wrapper)
+                    run_log_path, working_dir, input_do = parse_wrapper(wrapper)
                     working_dir.mkdir(parents=True, exist_ok=True)
                     commands = input_do.read_text(encoding="utf-8")
                     lines = []
@@ -193,8 +221,12 @@ class StataJobRunnerTests(unittest.TestCase):
                         lines.append(line)
 
                     lines.append(f"__AGENT_RC__={rc}")
-                    log_path.parent.mkdir(parents=True, exist_ok=True)
-                    log_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+                    run_log_path.parent.mkdir(parents=True, exist_ok=True)
+                    run_log_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+
+                    process_log = Path.cwd() / f"{wrapper.stem}.log"
+                    process_lines = ["outer process header", *lines]
+                    process_log.write_text("\\n".join(process_lines) + "\\n", encoding="utf-8")
                     return rc
 
 

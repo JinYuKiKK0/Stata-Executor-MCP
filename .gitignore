@@ -8,6 +8,7 @@ wheels/
 .trae/
 logs/
 .tmp_test_runs/
+wrapper.log
 
 # Virtual environments
 .venv

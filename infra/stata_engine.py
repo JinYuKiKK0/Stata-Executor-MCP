@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from importlib import import_module
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import time
 from typing import Literal
 import uuid
 
-from .config import BackendType, StataConfig
+from .config import StataConfig
 
 
 JobStatus = Literal["succeeded", "failed"]
@@ -27,11 +25,12 @@ ErrorKind = Literal[
     "artifact_collection_error",
 ]
 
-_WINDOWS_EXECUTABLES: dict[str, tuple[str, ...]] = {
-    "mp": ("StataMP-64.exe", "StataMP.exe"),
-    "se": ("StataSE-64.exe", "StataSE.exe"),
-    "be": ("StataBE-64.exe", "StataBE.exe"),
+_EDITION_PREFIX = {
+    "mp": "statamp",
+    "se": "statase",
+    "be": "statabe",
 }
+_HEADLESS_HINTS = ("console", "batch", "automation", "headless")
 
 
 @dataclass(slots=True)
@@ -71,7 +70,7 @@ class JobSpec:
 
 @dataclass(slots=True)
 class JobResult:
-    """Serializable job manifest consumed by the agent layer."""
+    """Serializable job manifest that only describes execution facts."""
 
     status: JobStatus
     phase: JobPhase
@@ -79,11 +78,11 @@ class JobResult:
     error_kind: ErrorKind | None
     summary: str
     job_dir: str
-    log_path: str | None
+    run_log_path: str | None
+    process_log_path: str | None
     log_tail: str
     artifacts: list[str]
     elapsed_ms: int
-    backend: BackendType
     working_dir: str
 
     def to_dict(self) -> dict[str, object]:
@@ -95,12 +94,13 @@ class JobResult:
 
 @dataclass(slots=True)
 class _JobContext:
-    backend: BackendType
     working_dir: Path
     job_dir: Path
     input_do_path: Path
     wrapper_do_path: Path
-    log_path: Path
+    run_log_path: Path
+    raw_process_log_path: Path
+    process_log_path: Path
     result_path: Path
     timeout_sec: int
     artifact_globs: tuple[str, ...]
@@ -108,13 +108,11 @@ class _JobContext:
 
 
 class StataJobRunner:
-    """Isolated Stata job runner with subprocess backend by default."""
+    """Isolated Stata job runner backed only by a subprocess Stata invocation."""
 
     def __init__(self, config: StataConfig):
         self.config = config
         self._job_root = config.resolve_job_root()
-        self._default_working_dir = config.resolve_working_dir()
-        self._pystata_ready = False
 
     def run_do(self, script_path: str | Path, spec: JobSpec | None = None) -> JobResult:
         job = self._create_job_context(spec)
@@ -129,11 +127,11 @@ class StataJobRunner:
                     error_kind="input_error",
                     summary=f"Script does not exist: {script}",
                     job_dir=str(job.job_dir),
-                    log_path=None,
+                    run_log_path=None,
+                    process_log_path=None,
                     log_tail="",
                     artifacts=[],
                     elapsed_ms=0,
-                    backend=job.backend,
                     working_dir=str(job.working_dir),
                 ),
             )
@@ -156,12 +154,13 @@ class StataJobRunner:
         job_dir = self._job_root / f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         job_dir.mkdir(parents=True, exist_ok=False)
         return _JobContext(
-            backend=self.config.backend,
             working_dir=working_dir,
             job_dir=job_dir,
             input_do_path=job_dir / "input.do",
             wrapper_do_path=job_dir / "wrapper.do",
-            log_path=job_dir / "run.log",
+            run_log_path=job_dir / "run.log",
+            raw_process_log_path=job_dir / "wrapper.log",
+            process_log_path=job_dir / "process.log",
             result_path=job_dir / "result.json",
             timeout_sec=timeout_sec,
             artifact_globs=artifact_globs,
@@ -171,50 +170,44 @@ class StataJobRunner:
     def _execute_prepared_job(self, job: _JobContext) -> JobResult:
         self._write_wrapper_do(job)
         before_snapshot = self._snapshot_artifacts(job.working_dir, job.artifact_globs)
-        if job.backend == "subprocess":
-            result = self._run_subprocess_job(job)
-        elif job.backend == "pystata":
-            result = self._run_pystata_job(job)
-        else:
-            raise ValueError(f"Unsupported backend: {job.backend}")
-
+        result = self._run_subprocess_job(job)
         if result.status == "failed":
             return self._finalize_result(job, result)
 
         try:
             artifacts = self._collect_artifacts(job.working_dir, job.artifact_globs, before_snapshot)
         except OSError as exc:
-            result = JobResult(
+            failed = JobResult(
                 status="failed",
                 phase="collect",
                 exit_code=result.exit_code,
                 error_kind="artifact_collection_error",
                 summary=f"Artifact collection failed: {exc}",
                 job_dir=result.job_dir,
-                log_path=result.log_path,
+                run_log_path=result.run_log_path,
+                process_log_path=result.process_log_path,
                 log_tail=result.log_tail,
                 artifacts=[],
                 elapsed_ms=result.elapsed_ms,
-                backend=result.backend,
                 working_dir=result.working_dir,
             )
-            return self._finalize_result(job, result)
+            return self._finalize_result(job, failed)
 
-        result = JobResult(
+        succeeded = JobResult(
             status="succeeded",
             phase="completed",
             exit_code=result.exit_code,
             error_kind=None,
             summary=result.summary,
             job_dir=result.job_dir,
-            log_path=result.log_path,
+            run_log_path=result.run_log_path,
+            process_log_path=result.process_log_path,
             log_tail=result.log_tail,
             artifacts=artifacts,
             elapsed_ms=result.elapsed_ms,
-            backend=result.backend,
             working_dir=result.working_dir,
         )
-        return self._finalize_result(job, result)
+        return self._finalize_result(job, succeeded)
 
     def _run_subprocess_job(self, job: _JobContext) -> JobResult:
         started_at = time.monotonic()
@@ -227,11 +220,11 @@ class StataJobRunner:
                 error_kind="bootstrap_error",
                 summary="Unable to resolve a Stata executable from stata_path and edition.",
                 job_dir=str(job.job_dir),
-                log_path=None,
+                run_log_path=None,
+                process_log_path=None,
                 log_tail="",
                 artifacts=[],
                 elapsed_ms=0,
-                backend=job.backend,
                 working_dir=str(job.working_dir),
             )
 
@@ -239,7 +232,7 @@ class StataJobRunner:
         try:
             completed = subprocess.run(
                 command,
-                cwd=job.working_dir,
+                cwd=job.job_dir,
                 env=job.env,
                 capture_output=True,
                 text=True,
@@ -248,9 +241,9 @@ class StataJobRunner:
             )
         except subprocess.TimeoutExpired as exc:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            log_text = self._read_text(job.log_path)
-            if not log_text:
-                log_text = self._compose_process_output(exc.stdout, exc.stderr)
+            process_log_path, process_text = self._finalize_process_log(job, self._compose_process_output(exc.stdout, exc.stderr))
+            run_text = self._read_text(job.run_log_path)
+            primary_text = run_text or process_text
             return JobResult(
                 status="failed",
                 phase="execute",
@@ -258,11 +251,11 @@ class StataJobRunner:
                 error_kind="timeout",
                 summary=f"Execution timed out after {job.timeout_sec}s and the subprocess was terminated.",
                 job_dir=str(job.job_dir),
-                log_path=str(job.log_path) if job.log_path.exists() else None,
-                log_tail=self._tail_text(log_text),
+                run_log_path=str(job.run_log_path) if job.run_log_path.exists() else None,
+                process_log_path=process_log_path,
+                log_tail=self._tail_text(primary_text),
                 artifacts=[],
                 elapsed_ms=elapsed_ms,
-                backend=job.backend,
                 working_dir=str(job.working_dir),
             )
         except OSError as exc:
@@ -274,21 +267,22 @@ class StataJobRunner:
                 error_kind="bootstrap_error",
                 summary=f"Failed to start Stata subprocess: {exc}",
                 job_dir=str(job.job_dir),
-                log_path=None,
+                run_log_path=None,
+                process_log_path=None,
                 log_tail="",
                 artifacts=[],
                 elapsed_ms=elapsed_ms,
-                backend=job.backend,
                 working_dir=str(job.working_dir),
             )
 
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        log_text = self._read_text(job.log_path)
         process_output = self._compose_process_output(completed.stdout, completed.stderr)
-        combined_text = log_text or process_output
-        exit_code = self._parse_exit_code(combined_text, fallback=completed.returncode)
+        process_log_path, process_text = self._finalize_process_log(job, process_output)
+        run_text = self._read_text(job.run_log_path)
+        primary_text = run_text or process_text
+        exit_code = self._parse_exit_code(primary_text, fallback=completed.returncode)
 
-        if completed.returncode != 0 and not log_text.strip():
+        if completed.returncode != 0 and not primary_text.strip():
             return JobResult(
                 status="failed",
                 phase="bootstrap",
@@ -296,166 +290,29 @@ class StataJobRunner:
                 error_kind="bootstrap_error",
                 summary=self._build_bootstrap_summary(process_output),
                 job_dir=str(job.job_dir),
-                log_path=None,
-                log_tail=self._tail_text(process_output),
+                run_log_path=None,
+                process_log_path=process_log_path,
+                log_tail=self._tail_text(process_text or process_output),
                 artifacts=[],
                 elapsed_ms=elapsed_ms,
-                backend=job.backend,
                 working_dir=str(job.working_dir),
             )
 
-        error_kind = None if exit_code == 0 else self._classify_execution_failure(combined_text, exit_code)
-        summary = self._build_execution_summary(combined_text, exit_code)
+        error_kind = None if exit_code == 0 else self._classify_execution_failure(primary_text, exit_code)
         return JobResult(
             status="succeeded" if exit_code == 0 else "failed",
             phase="completed" if exit_code == 0 else "execute",
             exit_code=exit_code,
             error_kind=error_kind,
-            summary=summary,
+            summary=self._build_execution_summary(primary_text, exit_code),
             job_dir=str(job.job_dir),
-            log_path=str(job.log_path) if job.log_path.exists() else None,
-            log_tail=self._tail_text(combined_text),
+            run_log_path=str(job.run_log_path) if job.run_log_path.exists() else None,
+            process_log_path=process_log_path,
+            log_tail=self._tail_text(primary_text),
             artifacts=[],
             elapsed_ms=elapsed_ms,
-            backend=job.backend,
             working_dir=str(job.working_dir),
         )
-
-    def _run_pystata_job(self, job: _JobContext) -> JobResult:
-        started_at = time.monotonic()
-        bootstrap_error = self._ensure_pystata_ready()
-        if bootstrap_error is not None:
-            return JobResult(
-                status="failed",
-                phase="bootstrap",
-                exit_code=1,
-                error_kind="bootstrap_error",
-                summary=bootstrap_error,
-                job_dir=str(job.job_dir),
-                log_path=None,
-                log_tail="",
-                artifacts=[],
-                elapsed_ms=0,
-                backend=job.backend,
-                working_dir=str(job.working_dir),
-            )
-
-        try:
-            stata = import_module("pystata.stata")
-            safe_log_path = job.log_path.as_posix()
-            safe_working_dir = job.working_dir.as_posix()
-            safe_input_path = job.input_do_path.as_posix()
-            log_name = f"agent_{uuid.uuid4().hex[:8]}"
-            stata.run("capture log close _all")
-            stata.run(f'log using "{safe_log_path}", replace text name({log_name})')
-            stata.run(f'cd "{safe_working_dir}"')
-            stata.run(f'capture noisily do "{safe_input_path}"')
-            stata.run('display "__AGENT_RC__=" _rc')
-            stata.run(f"log close {log_name}")
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            log_text = self._read_text(job.log_path)
-            return JobResult(
-                status="failed",
-                phase="execute",
-                exit_code=self._parse_exit_code(log_text, fallback=1),
-                error_kind="stata_runtime_error",
-                summary=f"pystata execution failed: {exc}",
-                job_dir=str(job.job_dir),
-                log_path=str(job.log_path) if job.log_path.exists() else None,
-                log_tail=self._tail_text(log_text),
-                artifacts=[],
-                elapsed_ms=elapsed_ms,
-                backend=job.backend,
-                working_dir=str(job.working_dir),
-            )
-        finally:
-            try:
-                stata = import_module("pystata.stata")
-                stata.run("capture log close _all")
-            except Exception:
-                pass
-
-        elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        log_text = self._read_text(job.log_path)
-        exit_code = self._parse_exit_code(log_text, fallback=1)
-        if elapsed_ms > job.timeout_sec * 1000:
-            return JobResult(
-                status="failed",
-                phase="execute",
-                exit_code=124,
-                error_kind="timeout",
-                summary=(
-                    f"Execution exceeded timeout budget ({job.timeout_sec}s) under the non-preemptive "
-                    "pystata backend."
-                ),
-                job_dir=str(job.job_dir),
-                log_path=str(job.log_path) if job.log_path.exists() else None,
-                log_tail=self._tail_text(log_text),
-                artifacts=[],
-                elapsed_ms=elapsed_ms,
-                backend=job.backend,
-                working_dir=str(job.working_dir),
-            )
-
-        error_kind = None if exit_code == 0 else self._classify_execution_failure(log_text, exit_code)
-        return JobResult(
-            status="succeeded" if exit_code == 0 else "failed",
-            phase="completed" if exit_code == 0 else "execute",
-            exit_code=exit_code,
-            error_kind=error_kind,
-            summary=self._build_execution_summary(log_text, exit_code),
-            job_dir=str(job.job_dir),
-            log_path=str(job.log_path) if job.log_path.exists() else None,
-            log_tail=self._tail_text(log_text),
-            artifacts=[],
-            elapsed_ms=elapsed_ms,
-            backend=job.backend,
-            working_dir=str(job.working_dir),
-        )
-
-    def _ensure_pystata_ready(self) -> str | None:
-        if self._pystata_ready:
-            return None
-
-        try:
-            if self.config.stata_path:
-                install_dir = self._resolve_stata_install_dir(Path(self.config.stata_path))
-                self._bootstrap_pystata(install_dir)
-            pystata_config = import_module("pystata.config")
-            pystata_config.init(self.config.edition)
-            self._pystata_ready = True
-            return None
-        except (FileNotFoundError, OSError) as exc:
-            return (
-                "Stata path is invalid. Set StataConfig.stata_path to a Stata executable or install "
-                f"directory. Details: {exc}"
-            )
-        except Exception as exc:  # pragma: no cover - depends on local Stata setup
-            return f"Failed to initialize pystata backend: {exc}"
-
-    def _bootstrap_pystata(self, install_dir: Path) -> None:
-        utilities_dir = (install_dir / "utilities").resolve()
-        if not utilities_dir.is_dir():
-            raise OSError(f"{install_dir.as_posix()} does not contain utilities/")
-
-        utilities_str = str(utilities_dir)
-        if utilities_str not in sys.path:
-            sys.path.append(utilities_str)
-
-    def _resolve_stata_install_dir(self, path: Path) -> Path:
-        candidate = path.expanduser().resolve()
-        if candidate.is_file():
-            candidate = candidate.parent
-
-        if (candidate / "utilities").is_dir():
-            return candidate
-
-        for child in candidate.glob("*"):
-            if child.is_dir() and (child / "utilities").is_dir():
-                return child
-
-        raise OSError(f"{candidate.as_posix()} is not a valid Stata installation directory")
 
     def _resolve_subprocess_executable(self) -> Path | None:
         if not self.config.stata_path:
@@ -463,16 +320,34 @@ class StataJobRunner:
 
         path = Path(self.config.stata_path).expanduser()
         if path.exists() and path.is_file():
+            preferred = self._find_preferred_executable(path.parent)
+            if preferred is not None:
+                return preferred
             return path.resolve()
 
         if path.exists() and path.is_dir():
-            for name in _WINDOWS_EXECUTABLES[self.config.edition]:
-                candidate = path / name
-                if candidate.exists():
-                    return candidate.resolve()
-            return None
+            return self._find_preferred_executable(path)
 
         return None
+
+    def _find_preferred_executable(self, directory: Path) -> Path | None:
+        if not directory.exists() or not directory.is_dir():
+            return None
+
+        prefix = _EDITION_PREFIX[self.config.edition]
+        candidates = [path for path in directory.glob("*.exe") if path.stem.lower().startswith(prefix)]
+        if not candidates:
+            return None
+
+        def score(candidate: Path) -> tuple[int, int, int, str]:
+            name = candidate.name.lower()
+            headless_rank = 0 if any(hint in name for hint in _HEADLESS_HINTS) else 1
+            sixty_four_rank = 0 if "64" in name else 1
+            gui_rank = 1 if name.startswith(prefix) else 2
+            return (headless_rank, sixty_four_rank, gui_rank, name)
+
+        candidates.sort(key=score)
+        return candidates[0].resolve()
 
     def _build_subprocess_command(self, executable: Path, wrapper_do_path: Path) -> list[str]:
         if os.name == "nt":
@@ -480,7 +355,7 @@ class StataJobRunner:
         return [str(executable), "-b", "do", str(wrapper_do_path)]
 
     def _write_wrapper_do(self, job: _JobContext) -> None:
-        safe_log_path = job.log_path.as_posix()
+        safe_run_log_path = job.run_log_path.as_posix()
         safe_working_dir = job.working_dir.as_posix()
         safe_input_path = job.input_do_path.as_posix()
         wrapper = "\n".join(
@@ -489,7 +364,7 @@ class StataJobRunner:
                 "clear all",
                 "set more off",
                 "capture log close _all",
-                f'log using "{safe_log_path}", replace text name(agentlog)',
+                f'log using "{safe_run_log_path}", replace text name(agentlog)',
                 f'cd "{safe_working_dir}"',
                 f'capture noisily do "{safe_input_path}"',
                 "local agent_rc = _rc",
@@ -540,6 +415,27 @@ class StataJobRunner:
             matches.extend(path for path in working_dir.glob(pattern) if path.is_file())
         return sorted(matches)
 
+    def _finalize_process_log(self, job: _JobContext, process_output: str) -> tuple[str | None, str]:
+        raw_text = self._read_text(job.raw_process_log_path)
+        run_text = self._read_text(job.run_log_path)
+
+        if raw_text:
+            if run_text and self._normalize_for_dedup(raw_text) == self._normalize_for_dedup(run_text):
+                job.raw_process_log_path.unlink(missing_ok=True)
+                return None, ""
+
+            if job.raw_process_log_path != job.process_log_path:
+                if job.process_log_path.exists():
+                    job.process_log_path.unlink()
+                job.raw_process_log_path.replace(job.process_log_path)
+            return str(job.process_log_path), raw_text
+
+        if process_output.strip():
+            job.process_log_path.write_text(process_output, encoding="utf-8")
+            return str(job.process_log_path), process_output
+
+        return None, ""
+
     def _parse_exit_code(self, text: str, fallback: int) -> int:
         match = re.findall(r"__AGENT_RC__\s*=\s*(\d+)", text)
         if match:
@@ -559,7 +455,7 @@ class StataJobRunner:
 
     def _build_execution_summary(self, text: str, exit_code: int) -> str:
         if exit_code == 0:
-            return "Stata job completed successfully."
+            return "Stata do-file completed successfully."
 
         for raw_line in text.splitlines():
             line = raw_line.strip()
@@ -571,22 +467,25 @@ class StataJobRunner:
                 continue
             low = line.lower()
             if "invalid syntax" in low or "unrecognized" in low or "error" in low:
-                return f"Stata failed with exit_code={exit_code}: {line}"
+                return f"Stata execution failed with exit_code={exit_code}: {line}"
 
         generic = [line.strip() for line in text.splitlines() if line.strip().startswith("r(")]
         if generic:
-            return f"Stata failed with exit_code={exit_code}: {generic[-1]}"
-        return f"Stata failed with exit_code={exit_code}."
+            return f"Stata execution failed with exit_code={exit_code}: {generic[-1]}"
+        return f"Stata execution failed with exit_code={exit_code}."
 
     def _build_bootstrap_summary(self, text: str) -> str:
         stripped = [line.strip() for line in text.splitlines() if line.strip()]
         if stripped:
             return f"Stata subprocess bootstrap failed: {stripped[-1]}"
-        return "Stata subprocess bootstrap failed before a log file was created."
+        return "Stata subprocess bootstrap failed before any execution log was created."
 
     def _compose_process_output(self, stdout: str | None, stderr: str | None) -> str:
         parts = [chunk.strip() for chunk in (stdout, stderr) if chunk and chunk.strip()]
         return "\n".join(parts)
+
+    def _normalize_for_dedup(self, text: str) -> str:
+        return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
     def _read_text(self, path: Path) -> str:
         if not path.exists():
