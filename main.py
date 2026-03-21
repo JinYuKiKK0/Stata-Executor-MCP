@@ -8,6 +8,15 @@ import sys
 from infra import JobSpec, StataConfig, StataJobRunner
 
 
+class CLIArgumentError(Exception):
+    """Raised when CLI arguments cannot be parsed into a valid request."""
+
+
+class StableArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise CLIArgumentError(message)
+
+
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--edition",
@@ -60,7 +69,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Stata job runner")
+    parser = StableArgumentParser(description="Stata job runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_do = subparsers.add_parser("run-do", help="Run a .do file as an isolated job")
@@ -98,37 +107,59 @@ def _emit_result(result_json: str, compact: bool) -> None:
     print(json.dumps(parsed, ensure_ascii=False, indent=2))
 
 
+def _emit_cli_argument_error(message: str, exit_code: int = 2) -> None:
+    payload = {
+        "status": "failed",
+        "phase": "input",
+        "exit_code": exit_code,
+        "error_kind": "input_error",
+        "summary": f"CLI argument error: {message}",
+        "job_dir": None,
+        "run_log_path": None,
+        "process_log_path": None,
+        "log_tail": "",
+        "artifacts": [],
+        "elapsed_ms": 0,
+        "working_dir": str(Path.cwd()),
+    }
+    print(json.dumps(payload, ensure_ascii=False))
+
+
 def main() -> None:
-    args = build_parser().parse_args()
-    env_overrides = _parse_env_overrides(args.env)
-    working_dir = Path(args.working_dir) if args.working_dir else Path.cwd()
-    job_root = Path(args.job_root) if args.job_root else Path("logs/jobs")
-    artifact_globs = tuple(args.artifact_glob)
+    try:
+        args = build_parser().parse_args()
+        env_overrides = _parse_env_overrides(args.env)
+        working_dir = Path(args.working_dir) if args.working_dir else Path.cwd()
+        job_root = Path(args.job_root) if args.job_root else Path("logs/jobs")
+        artifact_globs = tuple(args.artifact_glob)
 
-    config = StataConfig(
-        edition=args.edition,
-        stata_path=args.stata_path,
-        working_dir=working_dir,
-        job_root=job_root,
-        artifact_globs=artifact_globs,
-        env_overrides=env_overrides,
-    )
-    spec = JobSpec(
-        working_dir=working_dir,
-        timeout_sec=args.timeout_sec,
-        artifact_globs=artifact_globs,
-        env_overrides=env_overrides,
-    )
+        config = StataConfig(
+            edition=args.edition,
+            stata_path=args.stata_path,
+            working_dir=working_dir,
+            job_root=job_root,
+            artifact_globs=artifact_globs,
+            env_overrides=env_overrides,
+        )
+        spec = JobSpec(
+            working_dir=working_dir,
+            timeout_sec=args.timeout_sec,
+            artifact_globs=artifact_globs,
+            env_overrides=env_overrides,
+        )
 
-    runner = StataJobRunner(config)
-    if args.command == "run-do":
-        result = runner.run_do(args.script, spec)
-    else:
-        commands = args.commands if args.commands is not None else sys.stdin.read()
-        result = runner.run_inline(commands, spec)
+        runner = StataJobRunner(config)
+        if args.command == "run-do":
+            result = runner.run_do(args.script, spec)
+        else:
+            commands = args.commands if args.commands is not None else sys.stdin.read()
+            result = runner.run_inline(commands, spec)
 
-    _emit_result(result.to_json(), compact=args.json)
-    sys.exit(0 if result.status == "succeeded" else (result.exit_code or 1))
+        _emit_result(result.to_json(), compact=args.json)
+        sys.exit(0 if result.status == "succeeded" else (result.exit_code or 1))
+    except (CLIArgumentError, ValueError) as exc:
+        _emit_cli_argument_error(str(exc))
+        sys.exit(2)
 
 
 if __name__ == "__main__":

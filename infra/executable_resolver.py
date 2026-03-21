@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Literal
+
+
+_EDITION_PREFIX = {
+    "mp": "statamp",
+    "se": "statase",
+    "be": "statabe",
+}
+_HEADLESS_HINTS = ("console", "batch", "automation", "headless")
+
+
+def resolve_stata_executable(
+    stata_path: str | None,
+    edition: Literal["mp", "se", "be"],
+) -> Path | None:
+    """Resolve the best available Stata executable for subprocess execution."""
+
+    if not stata_path:
+        return None
+
+    path = Path(stata_path).expanduser()
+    if path.exists() and path.is_file():
+        preferred = find_preferred_executable(path.parent, edition)
+        if preferred is not None:
+            return preferred
+        return path.resolve()
+
+    if path.exists() and path.is_dir():
+        return find_preferred_executable(path, edition)
+
+    return None
+
+
+def find_preferred_executable(
+    directory: Path,
+    edition: Literal["mp", "se", "be"],
+) -> Path | None:
+    if not directory.exists() or not directory.is_dir():
+        return None
+
+    prefix = _EDITION_PREFIX[edition]
+    candidates = [path for path in directory.glob("*.exe") if path.stem.lower().startswith(prefix)]
+    if not candidates:
+        return None
+
+    def score(candidate: Path) -> tuple[int, int, int, str]:
+        name = candidate.name.lower()
+        headless_rank = 0 if any(hint in name for hint in _HEADLESS_HINTS) else 1
+        sixty_four_rank = 0 if "64" in name else 1
+        gui_rank = 1 if name.startswith(prefix) else 2
+        return (headless_rank, sixty_four_rank, gui_rank, name)
+
+    candidates.sort(key=score)
+    return candidates[0].resolve()
+
+
+def build_stata_command(executable: Path, wrapper_do_path: Path) -> list[str]:
+    if os.name == "nt":
+        return [str(executable), "/q", "/i", "/e", "do", str(wrapper_do_path)]
+    return [str(executable), "-b", "do", str(wrapper_do_path)]

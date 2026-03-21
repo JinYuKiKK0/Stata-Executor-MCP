@@ -7,7 +7,7 @@
 - 每次执行都是独立 job
 - `JobResult` 只描述执行事实，不判断经济学结果是否“合理”
 - `run.log` 是主执行日志
-- 外层 batch/process 日志会尽量去重；不能去重时，会被收敛进当前 `job_dir`
+- 外层 batch/process 日志只要与 `run.log` 重叠，就直接删除；只有存在独立信息时才收敛进当前 `job_dir`
 
 ## 公开接口
 
@@ -17,6 +17,13 @@
 - `JobSpec`
 - `JobResult`
 - `StataJobRunner`
+
+内部模块职责：
+
+- `infra/config.py`: 静态配置与目录解析
+- `infra/models.py`: 执行协议模型，定义 `JobSpec` / `JobResult`
+- `infra/executable_resolver.py`: Stata 可执行文件解析与命令构造
+- `infra/stata_engine.py`: job 编排、日志收敛、产物收集、结果落盘
 
 ### `StataConfig`
 
@@ -64,6 +71,7 @@
 - 退出码是多少
 - 报错发生在输入、启动、执行还是产物收集阶段
 - 主日志和外层进程日志分别在哪里
+- 即便执行失败，过程中已经生成了哪些产物
 
 ## Python 调用
 
@@ -132,6 +140,7 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 ```
 
 失败时 CLI 会返回非零退出码；标准输出始终是 `JobResult` JSON。
+即便是 CLI 参数错误，也会返回稳定 JSON 和退出码 `2`，而不是 Python traceback。
 
 ## Job 目录结构
 
@@ -145,7 +154,8 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 另外：
 
 - 如果 Stata 额外生成了外层 batch/process 日志，runner 会先尝试和 `run.log` 去重
-- 如果无法安全去重，这份日志会被保存为 `process.log`
+- 如果 `run.log` 已被完整包含在外层日志里，这份外层日志会被直接删除
+- 只有无法安全删掉且仍包含独立信息时，这份日志才会被保存为 `process.log`
 - `result.json` 会显式区分 `run_log_path` 和 `process_log_path`
 
 ## 可执行文件解析
@@ -168,6 +178,8 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 - timeout
 - job 隔离
 - 外层 process log 收敛进 `job_dir`
+- 失败作业产物收集
+- CLI 参数错误 JSON 协议
 
 运行方式：
 

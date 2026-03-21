@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import textwrap
 import unittest
 import uuid
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from infra import JobSpec, StataConfig, StataJobRunner
+from infra.executable_resolver import build_stata_command, resolve_stata_executable
 
 
 class StataJobRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._case_dirs: list[Path] = []
+
+    def tearDown(self) -> None:
+        if os.getenv("KEEP_TEST_ARTIFACTS", "0") == "1":
+            return
+        for case_dir in self._case_dirs:
+            shutil.rmtree(case_dir, ignore_errors=True)
+
     def test_missing_script_returns_input_error_and_manifest(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
@@ -64,7 +81,7 @@ class StataJobRunnerTests(unittest.TestCase):
             )
         )
 
-        resolved = runner._resolve_subprocess_executable()
+        resolved = resolve_stata_executable(str(install_dir), "mp")
 
         self.assertEqual(resolved, headless.resolve())
 
@@ -82,7 +99,7 @@ class StataJobRunnerTests(unittest.TestCase):
         job = runner._create_job_context(JobSpec())
         runner._write_wrapper_do(job)
         wrapper_text = job.wrapper_do_path.read_text(encoding="utf-8")
-        command = runner._build_subprocess_command(fake_exe, job.wrapper_do_path)
+        command = build_stata_command(fake_exe, job.wrapper_do_path)
 
         self.assertIn("exit `agent_rc', STATA clear", wrapper_text)
         if sys.platform.startswith("win"):
@@ -141,6 +158,27 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertIn("command foo is unrecognized", result.summary)
         self.assertNotEqual(result.summary.strip(), "Stata execution failed with exit_code=199: r(199);")
 
+    def test_failed_job_still_collects_artifacts(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+        working_dir = root / "wd"
+        runner = StataJobRunner(
+            StataConfig(
+                stata_path=str(fake_exe),
+                working_dir=working_dir,
+                job_root=root / "jobs",
+            )
+        )
+
+        result = runner.run_inline(
+            "FAKE_WRITE reports/partial.txt\nFAKE_ERROR 199|command foo is unrecognized",
+            JobSpec(timeout_sec=5, artifact_globs=("reports/**/*.txt",)),
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_kind, "stata_parse_or_command_error")
+        self.assertEqual(result.artifacts, [str((working_dir / "reports" / "partial.txt").resolve())])
+
     def test_timeout_terminates_subprocess_and_next_job_is_clean(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
@@ -190,6 +228,26 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertIn("process_log_path", second_manifest)
         self.assertIsNone(first_manifest["process_log_path"])
         self.assertIsNone(second_manifest["process_log_path"])
+
+    def test_cli_argument_errors_return_stable_json_protocol(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "main.py", "run-inline", "display 1", "--env", "INVALID", "--json"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stderr.strip(), "")
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["phase"], "input")
+        self.assertEqual(payload["error_kind"], "input_error")
+        self.assertEqual(payload["exit_code"], 2)
+        self.assertIsNone(payload["job_dir"])
+        self.assertIsNone(payload["run_log_path"])
+        self.assertIsNone(payload["process_log_path"])
 
     def _create_fake_stata_executable(self, root: Path) -> Path:
         fake_py = root / "fake_stata.py"
@@ -273,6 +331,7 @@ class StataJobRunnerTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         root = base / f"case_{uuid.uuid4().hex[:8]}"
         root.mkdir(parents=True, exist_ok=False)
+        self._case_dirs.append(root)
         return root
 
 

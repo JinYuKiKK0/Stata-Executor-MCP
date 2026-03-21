@@ -1,5 +1,6 @@
 from .config import StataConfig
-from .stata_engine import ErrorKind, JobPhase, JobResult, JobSpec, JobStatus, StataJobRunner
+from .models import ErrorKind, JobPhase, JobResult, JobSpec, JobStatus
+from .stata_engine import StataJobRunner
 
 __all__ = [
     "ErrorKind",

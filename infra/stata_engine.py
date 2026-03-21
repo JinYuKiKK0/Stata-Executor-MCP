@@ -1,95 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import time
-from typing import Literal
 import uuid
 
 from .config import StataConfig
-
-
-JobStatus = Literal["succeeded", "failed"]
-JobPhase = Literal["bootstrap", "input", "execute", "collect", "completed"]
-ErrorKind = Literal[
-    "bootstrap_error",
-    "input_error",
-    "timeout",
-    "stata_parse_or_command_error",
-    "stata_runtime_error",
-    "artifact_collection_error",
-]
-
-_EDITION_PREFIX = {
-    "mp": "statamp",
-    "se": "statase",
-    "be": "statabe",
-}
-_HEADLESS_HINTS = ("console", "batch", "automation", "headless")
-
-
-@dataclass(slots=True)
-class JobSpec:
-    """Execution-time overrides for one isolated Stata job."""
-
-    working_dir: Path | str | None = None
-    timeout_sec: int | None = None
-    artifact_globs: tuple[str, ...] = ()
-    env_overrides: dict[str, str] = field(default_factory=dict)
-
-    def resolve_working_dir(self, config: StataConfig) -> Path:
-        base = config.resolve_working_dir()
-        if self.working_dir is None:
-            return base
-        path = Path(self.working_dir)
-        if not path.is_absolute():
-            path = base / path
-        path = path.resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def resolve_timeout_sec(self, config: StataConfig) -> int:
-        return self.timeout_sec or config.default_timeout_sec
-
-    def resolve_artifact_globs(self, config: StataConfig) -> tuple[str, ...]:
-        if self.artifact_globs:
-            return tuple(self.artifact_globs)
-        return tuple(config.artifact_globs)
-
-    def resolve_env(self, config: StataConfig) -> dict[str, str]:
-        env = dict(os.environ)
-        env.update(config.env_overrides)
-        env.update(self.env_overrides)
-        return env
-
-
-@dataclass(slots=True)
-class JobResult:
-    """Serializable job manifest that only describes execution facts."""
-
-    status: JobStatus
-    phase: JobPhase
-    exit_code: int
-    error_kind: ErrorKind | None
-    summary: str
-    job_dir: str
-    run_log_path: str | None
-    process_log_path: str | None
-    log_tail: str
-    artifacts: list[str]
-    elapsed_ms: int
-    working_dir: str
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False)
+from .executable_resolver import build_stata_command, resolve_stata_executable
+from .models import ErrorKind, JobResult, JobSpec
 
 
 @dataclass(slots=True)
@@ -171,12 +93,26 @@ class StataJobRunner:
         self._write_wrapper_do(job)
         before_snapshot = self._snapshot_artifacts(job.working_dir, job.artifact_globs)
         result = self._run_subprocess_job(job)
-        if result.status == "failed":
-            return self._finalize_result(job, result)
-
         try:
             artifacts = self._collect_artifacts(job.working_dir, job.artifact_globs, before_snapshot)
         except OSError as exc:
+            if result.status == "failed":
+                failed = JobResult(
+                    status=result.status,
+                    phase=result.phase,
+                    exit_code=result.exit_code,
+                    error_kind=result.error_kind,
+                    summary=f"{result.summary} Artifact collection also failed: {exc}",
+                    job_dir=result.job_dir,
+                    run_log_path=result.run_log_path,
+                    process_log_path=result.process_log_path,
+                    log_tail=result.log_tail,
+                    artifacts=[],
+                    elapsed_ms=result.elapsed_ms,
+                    working_dir=result.working_dir,
+                )
+                return self._finalize_result(job, failed)
+
             failed = JobResult(
                 status="failed",
                 phase="collect",
@@ -188,6 +124,23 @@ class StataJobRunner:
                 process_log_path=result.process_log_path,
                 log_tail=result.log_tail,
                 artifacts=[],
+                elapsed_ms=result.elapsed_ms,
+                working_dir=result.working_dir,
+            )
+            return self._finalize_result(job, failed)
+
+        if result.status == "failed":
+            failed = JobResult(
+                status=result.status,
+                phase=result.phase,
+                exit_code=result.exit_code,
+                error_kind=result.error_kind,
+                summary=result.summary,
+                job_dir=result.job_dir,
+                run_log_path=result.run_log_path,
+                process_log_path=result.process_log_path,
+                log_tail=result.log_tail,
+                artifacts=artifacts,
                 elapsed_ms=result.elapsed_ms,
                 working_dir=result.working_dir,
             )
@@ -211,7 +164,7 @@ class StataJobRunner:
 
     def _run_subprocess_job(self, job: _JobContext) -> JobResult:
         started_at = time.monotonic()
-        executable = self._resolve_subprocess_executable()
+        executable = resolve_stata_executable(self.config.stata_path, self.config.edition)
         if executable is None:
             return JobResult(
                 status="failed",
@@ -228,7 +181,7 @@ class StataJobRunner:
                 working_dir=str(job.working_dir),
             )
 
-        command = self._build_subprocess_command(executable, job.wrapper_do_path)
+        command = build_stata_command(executable, job.wrapper_do_path)
         try:
             completed = subprocess.run(
                 command,
@@ -313,46 +266,6 @@ class StataJobRunner:
             elapsed_ms=elapsed_ms,
             working_dir=str(job.working_dir),
         )
-
-    def _resolve_subprocess_executable(self) -> Path | None:
-        if not self.config.stata_path:
-            return None
-
-        path = Path(self.config.stata_path).expanduser()
-        if path.exists() and path.is_file():
-            preferred = self._find_preferred_executable(path.parent)
-            if preferred is not None:
-                return preferred
-            return path.resolve()
-
-        if path.exists() and path.is_dir():
-            return self._find_preferred_executable(path)
-
-        return None
-
-    def _find_preferred_executable(self, directory: Path) -> Path | None:
-        if not directory.exists() or not directory.is_dir():
-            return None
-
-        prefix = _EDITION_PREFIX[self.config.edition]
-        candidates = [path for path in directory.glob("*.exe") if path.stem.lower().startswith(prefix)]
-        if not candidates:
-            return None
-
-        def score(candidate: Path) -> tuple[int, int, int, str]:
-            name = candidate.name.lower()
-            headless_rank = 0 if any(hint in name for hint in _HEADLESS_HINTS) else 1
-            sixty_four_rank = 0 if "64" in name else 1
-            gui_rank = 1 if name.startswith(prefix) else 2
-            return (headless_rank, sixty_four_rank, gui_rank, name)
-
-        candidates.sort(key=score)
-        return candidates[0].resolve()
-
-    def _build_subprocess_command(self, executable: Path, wrapper_do_path: Path) -> list[str]:
-        if os.name == "nt":
-            return [str(executable), "/q", "/i", "/e", "do", str(wrapper_do_path)]
-        return [str(executable), "-b", "do", str(wrapper_do_path)]
 
     def _write_wrapper_do(self, job: _JobContext) -> None:
         safe_run_log_path = job.run_log_path.as_posix()
