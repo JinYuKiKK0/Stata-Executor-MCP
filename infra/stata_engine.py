@@ -420,7 +420,9 @@ class StataJobRunner:
         run_text = self._read_text(job.run_log_path)
 
         if raw_text:
-            if run_text and self._normalize_for_dedup(raw_text) == self._normalize_for_dedup(run_text):
+            normalized_raw = self._normalize_for_dedup(raw_text)
+            normalized_run = self._normalize_for_dedup(run_text)
+            if normalized_run and normalized_run in normalized_raw:
                 job.raw_process_log_path.unlink(missing_ok=True)
                 return None, ""
 

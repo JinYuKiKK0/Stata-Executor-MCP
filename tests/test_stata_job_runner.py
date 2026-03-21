@@ -88,7 +88,7 @@ class StataJobRunnerTests(unittest.TestCase):
         if sys.platform.startswith("win"):
             self.assertEqual(command[1:4], ["/q", "/i", "/e"])
 
-    def test_run_do_resolves_relative_paths_and_collects_process_log_in_job_dir(self) -> None:
+    def test_run_do_resolves_relative_paths_and_deletes_redundant_process_log(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
         working_dir = root / "workspace"
@@ -117,7 +117,9 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertTrue((Path(result.job_dir) / "wrapper.do").exists())
         self.assertTrue((Path(result.job_dir) / "result.json").exists())
         self.assertEqual(Path(result.run_log_path).parent, Path(result.job_dir))
-        self.assertEqual(Path(result.process_log_path).parent, Path(result.job_dir))
+        self.assertIsNone(result.process_log_path)
+        self.assertFalse((Path(result.job_dir) / "wrapper.log").exists())
+        self.assertFalse((Path(result.job_dir) / "process.log").exists())
         self.assertFalse((root / "wrapper.log").exists())
         self.assertFalse((working_dir / "wrapper.log").exists())
 
@@ -186,6 +188,8 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertEqual(second_manifest["status"], "succeeded")
         self.assertIn("run_log_path", first_manifest)
         self.assertIn("process_log_path", second_manifest)
+        self.assertIsNone(first_manifest["process_log_path"])
+        self.assertIsNone(second_manifest["process_log_path"])
 
     def _create_fake_stata_executable(self, root: Path) -> Path:
         fake_py = root / "fake_stata.py"
