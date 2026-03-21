@@ -68,6 +68,26 @@ class StataJobRunnerTests(unittest.TestCase):
 
         self.assertEqual(resolved, headless.resolve())
 
+    def test_wrapper_requests_full_stata_exit_and_windows_batch_flags(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+        runner = StataJobRunner(
+            StataConfig(
+                stata_path=str(fake_exe),
+                working_dir=root / "wd",
+                job_root=root / "jobs",
+            )
+        )
+
+        job = runner._create_job_context(JobSpec())
+        runner._write_wrapper_do(job)
+        wrapper_text = job.wrapper_do_path.read_text(encoding="utf-8")
+        command = runner._build_subprocess_command(fake_exe, job.wrapper_do_path)
+
+        self.assertIn("exit `agent_rc', STATA clear", wrapper_text)
+        if sys.platform.startswith("win"):
+            self.assertEqual(command[1:4], ["/q", "/i", "/e"])
+
     def test_run_do_resolves_relative_paths_and_collects_process_log_in_job_dir(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)

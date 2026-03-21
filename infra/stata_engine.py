@@ -351,7 +351,7 @@ class StataJobRunner:
 
     def _build_subprocess_command(self, executable: Path, wrapper_do_path: Path) -> list[str]:
         if os.name == "nt":
-            return [str(executable), "/e", "do", str(wrapper_do_path)]
+            return [str(executable), "/q", "/i", "/e", "do", str(wrapper_do_path)]
         return [str(executable), "-b", "do", str(wrapper_do_path)]
 
     def _write_wrapper_do(self, job: _JobContext) -> None:
@@ -370,7 +370,7 @@ class StataJobRunner:
                 "local agent_rc = _rc",
                 'display "__AGENT_RC__=`agent_rc\'"',
                 "capture log close agentlog",
-                "exit `agent_rc'",
+                "exit `agent_rc', STATA clear",
                 "",
             ]
         )
