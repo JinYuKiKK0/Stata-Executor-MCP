@@ -1,144 +1,177 @@
-# StataAgent 本地 MVP 说明（pystata）
+# StataAgent 执行基础设施 V2
 
-这个 MVP 的目标是先把 Stata 在本机跑通，并给后续 Agent/MCP 封装提供稳定底座。
+该模块现在是作业型执行器，而不是进程内交互式 `StataEngine`。
 
-## 1. 每个 Python 文件负责什么
+核心目标：
 
-- `main.py`
-  负责命令行入口。
-  支持参数解析（`--script`、`--edition`、`--stata-path`），并调用 `StataEngine` 执行。
-  不传 `--script` 时会执行一组 smoke test（`sysuse auto` + `summarize` + `regress`）。
+- 每次执行都是独立 job
+- 默认使用可监督的子进程 Stata backend
+- 对上层返回结构化 manifest，而不是原始日志字符串
 
-- `infra/config.py`
-  定义 `StataConfig` 配置数据类。
-  负责管理执行参数：`edition`、`stata_path`、`working_dir`、`log_dir`。
-  提供路径解析与自动建目录（`resolve_working_dir`、`resolve_log_dir`）。
+## 公开接口
 
-- `infra/stata_engine.py`
-  核心执行引擎 `StataEngine`。
-  负责初始化 Stata（从 Stata 安装目录的 `utilities/` 引导 `pystata`）、执行命令、执行 do 文件、导入导出数据、写入日志。
-  同时封装了统一异常：
-  `StataEngineError`、`StataNotInstalledError`、`StataLicenseError`、`StataCommandError`。
+`infra` 当前导出：
 
-- `infra/__init__.py`
-  对外导出公共 API。
-  让上层可以直接 `from infra import StataEngine, StataConfig` 使用，不需要关心内部文件结构。
+- `StataConfig`
+- `JobSpec`
+- `JobResult`
+- `StataJobRunner`
 
-## 2. 运行依赖与环境要求
+### `StataConfig`
 
-- Python `3.12+`
-- 本机已安装 Stata 17+ 且有可用 license
-- 使用 UV 管理环境（项目要求）
+静态配置，定义默认 backend、Stata 路径、工作目录和 job 根目录。
 
-安装依赖：
+关键字段：
 
-```bash
-uv sync
-```
+- `backend`: `subprocess` 或 `pystata`
+- `stata_path`: Stata 可执行文件路径，或安装目录
+- `working_dir`: 相对输入输出的基准目录
+- `job_root`: 每次 job 的独立落盘目录
+- `default_timeout_sec`
+- `artifact_globs`
+- `env_overrides`
 
-## 3. 配置说明（重点）
+### `JobSpec`
 
-### 3.1 Stata 安装路径
+单次执行覆盖项：
 
-`STATA_PATH` 或 `--stata-path` 必须指向 Stata 安装目录，并且该目录下应存在 `utilities/` 子目录。
+- `working_dir`
+- `timeout_sec`
+- `artifact_globs`
+- `env_overrides`
 
-PowerShell:
+### `JobResult`
 
-```powershell
-$env:STATA_PATH = "D:\Stata17"
-```
+统一返回协议：
 
-Git Bash:
+- `status`
+- `phase`
+- `exit_code`
+- `error_kind`
+- `summary`
+- `job_dir`
+- `log_path`
+- `log_tail`
+- `artifacts`
+- `elapsed_ms`
+- `backend`
+- `working_dir`
 
-```bash
-export STATA_PATH="D:/Stata17"
-```
-
-如果不给 `STATA_PATH`，引擎会尝试走 `pystata.config.init(edition)` 的默认初始化。
-
-### 3.2 edition 参数
-
-支持：`mp`、`se`、`be`。
-
-示例：
-
-```bash
-uv run python main.py --edition mp
-```
-
-## 4. 如何使用
-
-### 4.1 快速自检（Smoke Test）
-
-```bash
-uv run python main.py --edition mp
-```
-
-默认会执行：
-
-- `sysuse auto, clear`
-- `summarize price weight mpg`
-- `regress price weight mpg`
-
-执行日志会写到 `logs/`，并将日志内容打印到终端。
-
-### 4.2 执行你自己的 do 文件
-
-```bash
-uv run python main.py --script ./path/to/analysis.do --edition mp
-```
-
-机器调用建议打开 JSON 输出并按退出码判断成功/失败：
-
-```bash
-uv run python main.py --script ./path/to/analysis.do --edition mp --json
-```
-
-### 4.3 在代码中调用（给 Agent 使用）
+## Python 调用
 
 ```python
 from pathlib import Path
 
-from infra import StataConfig, StataEngine
+from infra import JobSpec, StataConfig, StataJobRunner
 
-cfg = StataConfig(
-		edition="mp",
-		stata_path="D:/Stata17",  # 可选，不填则走默认初始化
-		working_dir=Path.cwd(),
-		log_dir=Path("logs"),
+runner = StataJobRunner(
+    StataConfig(
+        backend="subprocess",
+        edition="mp",
+        stata_path="D:/Program Files/Stata17/StataMP-64.exe",
+        working_dir=Path.cwd(),
+        job_root=Path("logs/jobs"),
+    )
 )
 
-engine = StataEngine(cfg)
+result = runner.run_do(
+    "analysis.do",
+    JobSpec(
+        timeout_sec=120,
+        artifact_globs=("output/**/*.rtf", "output/**/*.xlsx"),
+    ),
+)
 
-res1 = engine.run("sysuse auto, clear")
-res2 = engine.run("regress price weight mpg")
-
-# 导入/导出示例
-res3 = engine.load_data("./data/input.csv")
-res4 = engine.export_data("./data/output.dta")
-
-print(res2.ok, res2.rc, res2.error_type)
-print(res2.summary)
-print(res2.log_path)
-print(engine.get_output())  # 等价于最近一次执行结果的 log_tail
-engine.close()
+print(result.status, result.exit_code, result.error_kind)
+print(result.summary)
+print(result.job_dir)
+print(result.log_tail)
 ```
 
-## 5. 常见问题
+运行 inline 命令时，runner 会先物化成 `input.do`，再以隔离 job 执行：
 
-- 报错：`path is invalid`
-  说明 `STATA_PATH` 层级不对，检查你填写的目录下是否有 `utilities/`。
+```python
+result = runner.run_inline(
+    """
+    sysuse auto, clear
+    regress price weight mpg
+    """.strip(),
+    JobSpec(timeout_sec=60),
+)
+```
 
-- 报错：`license` 相关
-  说明 Stata 授权不可用，先确认本机 Stata GUI 可正常启动并已激活。
+## CLI
 
-- 报错：`No module named pystata`
-  通常是 Stata 初始化未成功把 `utilities` 加入 Python 路径，优先检查 `STATA_PATH` 是否指向包含 `utilities/` 的目录。
+### 执行 do 文件
 
-## 6. 后续扩展建议
+```bash
+python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis.do ^
+  --backend subprocess ^
+  --stata-path "D:/Program Files/Stata17/StataMP-64.exe" ^
+  --working-dir . ^
+  --artifact-glob "output/**/*.rtf"
+```
 
-本地 MVP 稳定后，建议把 `StataEngine` 直接封装成 MCP 工具层，最小先做 3 个工具：
+### 执行 inline 命令
 
-- `run_cmds`
-- `run_do`
-- `get_last_output`
+```bash
+python main.py run-inline "sysuse auto, clear" --stata-path "D:/Program Files/Stata17/StataMP-64.exe"
+```
+
+### 机器调用
+
+```bash
+python main.py run-do D:/orders/Archive/stata/tech_pregnant_2zi/scripts/analysis.do --stata-path "D:/Program Files/Stata17/StataMP-64.exe" --json
+```
+
+失败时 CLI 会返回非零退出码；标准输出始终是 `JobResult` JSON。
+
+## Job 目录结构
+
+每次执行都会在 `job_root` 下创建一个独立目录，至少包含：
+
+- `input.do`
+- `wrapper.do`
+- `run.log`
+- `result.json`
+
+这样上层 Agent 可以直接基于 manifest 做错误修复，不必再依赖“最后一次日志”这类共享状态。
+
+## Backend 说明
+
+### `subprocess`
+
+默认 backend。
+
+优点：
+
+- 有真实超时终止能力
+- job 级隔离更清晰
+- 更适合作为 Skill/MCP 底座
+
+### `pystata`
+
+仅保留为兼容/调试 backend。
+
+限制：
+
+- 无法提供真正的抢占式 timeout
+- 更容易受进程内状态影响
+
+## 测试
+
+当前仓库包含基于 fake Stata 可执行文件的行为测试，覆盖：
+
+- 缺失脚本
+- bootstrap 失败
+- 相对路径解析
+- 语法/命令错误摘要
+- timeout
+- job 隔离
+
+运行方式：
+
+```bash
+python -m unittest discover -s tests -v
+```
+

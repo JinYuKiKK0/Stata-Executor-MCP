@@ -2,99 +2,141 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
-from infra import StataConfig, StataEngine, StataEngineError
+from infra import JobSpec, StataConfig, StataJobRunner
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Local StataAgent MVP runner")
-    parser.add_argument("--script", type=str, help="Optional .do file to run")
+def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="subprocess",
+        choices=["subprocess", "pystata"],
+        help="Execution backend. Use subprocess for supervised jobs, pystata for debugging.",
+    )
     parser.add_argument(
         "--edition",
         type=str,
         default="mp",
         choices=["mp", "se", "be"],
-        help="Stata edition for pystata init",
+        help="Stata edition used to resolve the executable or initialize pystata.",
     )
     parser.add_argument(
         "--stata-path",
         type=str,
         default=None,
-        help="Optional Stata install path (overrides STATA_PATH env and config default)",
+        help="Path to the Stata executable or installation directory.",
+    )
+    parser.add_argument(
+        "--working-dir",
+        type=str,
+        default=None,
+        help="Base working directory for resolving relative inputs and outputs.",
+    )
+    parser.add_argument(
+        "--job-root",
+        type=str,
+        default=None,
+        help="Directory where per-job manifests, logs, and input copies are stored.",
     )
     parser.add_argument(
         "--timeout-sec",
         type=int,
         default=None,
-        help="Optional timeout budget in seconds for one execution job",
+        help="Hard timeout in seconds for subprocess jobs.",
+    )
+    parser.add_argument(
+        "--artifact-glob",
+        action="append",
+        default=[],
+        help="Relative glob used to collect new or changed artifacts after execution.",
+    )
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        help="Environment override in KEY=VALUE form. Can be repeated.",
     )
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print structured JSON result for machine consumption",
+        help="Print compact JSON instead of pretty JSON.",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Stata job runner")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_do = subparsers.add_parser("run-do", help="Run a .do file as an isolated job")
+    _add_common_arguments(run_do)
+    run_do.add_argument("script", type=str, help="Path to the .do script, relative to working_dir if needed")
+
+    run_inline = subparsers.add_parser("run-inline", help="Run inline commands as an isolated job")
+    _add_common_arguments(run_inline)
+    run_inline.add_argument(
+        "commands",
+        nargs="?",
+        type=str,
+        help="Inline commands. If omitted, commands are read from stdin.",
     )
     return parser
 
 
+def _parse_env_overrides(values: list[str]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for raw in values:
+        if "=" not in raw:
+            raise ValueError(f"Invalid --env value: {raw!r}. Expected KEY=VALUE.")
+        key, value = raw.split("=", 1)
+        if not key:
+            raise ValueError("Environment override key cannot be empty.")
+        env[key] = value
+    return env
+
+
+def _emit_result(result_json: str, compact: bool) -> None:
+    if compact:
+        print(result_json)
+        return
+    parsed = json.loads(result_json)
+    print(json.dumps(parsed, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    default_config = StataConfig()
-    resolved_stata_path = args.stata_path or os.getenv("STATA_PATH") or default_config.stata_path
+    env_overrides = _parse_env_overrides(args.env)
+    working_dir = Path(args.working_dir) if args.working_dir else Path.cwd()
+    job_root = Path(args.job_root) if args.job_root else Path("logs/jobs")
+    artifact_globs = tuple(args.artifact_glob)
 
     config = StataConfig(
         edition=args.edition,
-        stata_path=resolved_stata_path,
-        working_dir=Path.cwd(),
-        log_dir=Path("logs"),
+        backend=args.backend,
+        stata_path=args.stata_path,
+        working_dir=working_dir,
+        job_root=job_root,
+        artifact_globs=artifact_globs,
+        env_overrides=env_overrides,
+    )
+    spec = JobSpec(
+        working_dir=working_dir,
+        timeout_sec=args.timeout_sec,
+        artifact_globs=artifact_globs,
+        env_overrides=env_overrides,
     )
 
-    try:
-        engine = StataEngine(config)
+    runner = StataJobRunner(config)
+    if args.command == "run-do":
+        result = runner.run_do(args.script, spec)
+    else:
+        commands = args.commands if args.commands is not None else sys.stdin.read()
+        result = runner.run_inline(commands, spec)
 
-        if args.script:
-            result = engine.run_script(args.script, timeout_sec=args.timeout_sec)
-        else:
-            # Minimal smoke test to verify local pystata wiring.
-            result = engine.run(
-                """
-                sysuse auto, clear
-                summarize price weight mpg
-                regress price weight mpg
-                """.strip(),
-                timeout_sec=args.timeout_sec,
-            )
-
-        if args.json:
-            print(result.to_json())
-        else:
-            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
-
-        if not result.ok:
-            sys.exit(result.rc if result.rc > 0 else 1)
-    except StataEngineError as exc:
-        failure = {
-            "ok": False,
-            "rc": 1,
-            "error_type": "engine_init_error",
-            "summary": f"StataEngine startup/execution failed: {exc}",
-            "log_path": None,
-            "log_tail": "",
-            "artifacts": [],
-            "elapsed_ms": 0,
-            "working_dir": str(Path.cwd()),
-        }
-        if args.json:
-            print(json.dumps(failure, ensure_ascii=False))
-        else:
-            print(json.dumps(failure, ensure_ascii=False, indent=2))
-            print(f"Effective stata_path: {config.stata_path}")
-            print(
-                "Hint: set --stata-path or STATA_PATH to a directory that contains the 'utilities' folder."
-            )
-        sys.exit(1)
+    _emit_result(result.to_json(), compact=args.json)
+    sys.exit(0 if result.status == "succeeded" else (result.exit_code or 1))
 
 
 if __name__ == "__main__":
