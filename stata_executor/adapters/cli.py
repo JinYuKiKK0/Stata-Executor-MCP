@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 
 from ..contract import RunDoRequest, RunInlineRequest
@@ -22,8 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = StableArgumentParser(description="Zero-dependency Stata executor.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    doctor = subparsers.add_parser("doctor", help="Validate user config and resolve the Stata executable")
-    doctor.add_argument("--stata-executable", type=str, default=None)
+    doctor = subparsers.add_parser("doctor", help="Validate CLI arguments and resolve the Stata executable")
+    doctor.add_argument("--stata-executable", type=str, required=True)
     doctor.add_argument("--edition", type=str, default=None, choices=["mp", "se", "be"])
     doctor.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
@@ -43,7 +42,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-sec", type=int, default=None)
     parser.add_argument("--artifact-glob", action="append", default=[])
     parser.add_argument("--edition", type=str, default=None, choices=["mp", "se", "be"])
-    parser.add_argument("--stata-executable", type=str, default=None)
+    parser.add_argument("--stata-executable", type=str, required=True)
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
@@ -96,15 +95,10 @@ def main(argv: list[str] | None = None) -> int:
             "exit_code": 2,
             "error_kind": "input_error",
             "summary": f"CLI argument error: {exc}",
-            "job_id": None,
-            "job_dir": None,
-            "working_dir": str(Path.cwd().resolve()),
-            "run_log_path": None,
-            "process_log_path": None,
+            "result_text": "",
             "diagnostic_excerpt": "",
             "error_signature": None,
             "failed_command": None,
-            "log_tail": "",
             "artifacts": [],
             "elapsed_ms": 0,
         }

@@ -6,7 +6,6 @@ from pathlib import Path
 import time
 import uuid
 
-from ..config import UserConfigError, load_user_config
 from ..contract import ConfigSource, Edition, ExecutorDefaults, RunDoRequest, RunInlineRequest
 
 
@@ -38,35 +37,34 @@ class ResolvedRuntime:
 
 
 class RuntimeBootstrapError(ValueError):
-    """Raised when user config cannot be read or runtime defaults cannot be resolved."""
+    """Raised when runtime defaults cannot be resolved."""
 
 
 def resolve_configuration(
     *,
     stata_executable: str | None,
     edition: Edition | None,
+    source_override: ConfigSource | None = None,
 ) -> ResolvedConfiguration:
-    try:
-        user_config = load_user_config()
-    except UserConfigError as exc:
-        raise RuntimeBootstrapError(str(exc)) from exc
-
-    source: ConfigSource
-    if stata_executable:
-        source = "explicit"
-    elif user_config.stata_executable:
-        source = "user_config"
-    else:
-        source = "missing"
+    source: ConfigSource = source_override or ("explicit" if stata_executable else "missing")
+    resolved_edition = _resolve_edition(edition)
 
     return ResolvedConfiguration(
-        config_path=user_config.config_path,
-        config_exists=user_config.exists,
+        config_path=Path(""),
+        config_exists=False,
         config_source=source,
-        stata_executable=stata_executable or user_config.stata_executable,
-        edition=edition or user_config.edition,
-        defaults=user_config.defaults,
+        stata_executable=stata_executable,
+        edition=resolved_edition,
+        defaults=ExecutorDefaults(),
     )
+
+
+def _resolve_edition(edition: Edition | None) -> Edition:
+    if edition is None:
+        return "mp"
+    if edition not in {"mp", "se", "be"}:
+        raise RuntimeBootstrapError("Edition must be one of: mp, se, be.")
+    return edition
 
 
 def prepare_runtime(request: RunDoRequest | RunInlineRequest) -> ResolvedRuntime:

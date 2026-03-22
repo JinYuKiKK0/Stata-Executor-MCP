@@ -15,7 +15,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from stata_executor import RunDoRequest, RunInlineRequest, StataExecutor
-from stata_executor.config import default_config_path, load_user_config
 from stata_executor.runtime.executable_resolver import build_stata_command, resolve_stata_executable
 
 
@@ -29,75 +28,22 @@ class StataExecutorTests(unittest.TestCase):
         for case_dir in self._case_dirs:
             shutil.rmtree(case_dir, ignore_errors=True)
 
-    def test_default_config_path_matches_platform_rules(self) -> None:
-        home = Path("C:/Users/Test")
-        win_path = default_config_path(platform_name="win32", env={"APPDATA": "C:/Users/Test/AppData/Roaming"}, home=home)
-        mac_path = default_config_path(platform_name="darwin", env={}, home=Path("/Users/test"))
-        linux_path = default_config_path(platform_name="linux", env={}, home=Path("/home/test"))
-
-        self.assertEqual(win_path, Path("C:/Users/Test/AppData/Roaming/stata-executor/config.json"))
-        self.assertEqual(mac_path, Path("/Users/test/Library/Application Support/stata-executor/config.json"))
-        self.assertEqual(linux_path, Path("/home/test/.config/stata-executor/config.json"))
-
-    def test_load_user_config_rejects_invalid_json(self) -> None:
-        root = self._workspace_case_dir()
-        config_path = root / "config.json"
-        config_path.write_text("{not-json", encoding="utf-8")
-
-        with self.assertRaisesRegex(ValueError, "Invalid JSON"):
-            load_user_config(config_path=config_path)
-
     def test_doctor_reports_missing_configuration(self) -> None:
-        root = self._workspace_case_dir()
-        config_home = root / "appdata"
-        config_home.mkdir(parents=True, exist_ok=True)
-        previous = os.environ.get("APPDATA")
-        os.environ["APPDATA"] = str(config_home)
-        try:
-            result = StataExecutor().doctor()
-        finally:
-            if previous is None:
-                os.environ.pop("APPDATA", None)
-            else:
-                os.environ["APPDATA"] = previous
+        result = StataExecutor().doctor()
 
         self.assertFalse(result.ready)
         self.assertEqual(result.config_source, "missing")
         self.assertIn("No Stata executable configured", result.summary)
 
-    def test_doctor_uses_user_config_and_resolves_executable(self) -> None:
+    def test_doctor_uses_explicit_config_and_resolves_executable(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
-        config_root = root / "appdata" / "stata-executor"
-        config_root.mkdir(parents=True, exist_ok=True)
-        (config_root / "config.json").write_text(
-            json.dumps(
-                {
-                    "stata_executable": str(fake_exe),
-                    "edition": "mp",
-                    "defaults": {
-                        "timeout_sec": 90,
-                        "artifact_globs": ["reports/**/*.rtf"],
-                    },
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        previous = os.environ.get("APPDATA")
-        os.environ["APPDATA"] = str(root / "appdata")
-        try:
-            result = StataExecutor().doctor()
-        finally:
-            if previous is None:
-                os.environ.pop("APPDATA", None)
-            else:
-                os.environ["APPDATA"] = previous
+        result = StataExecutor().doctor(stata_executable=str(fake_exe), edition="mp")
 
         self.assertTrue(result.ready)
-        self.assertEqual(result.config_source, "user_config")
+        self.assertEqual(result.config_source, "explicit")
         self.assertTrue(result.stata_executable.endswith("fake_stata.cmd"))
-        self.assertEqual(result.defaults.timeout_sec, 90)
+        self.assertEqual(result.defaults.timeout_sec, 120)
 
     def test_executable_resolution_prefers_headless_candidate(self) -> None:
         root = self._workspace_case_dir()
@@ -138,8 +84,8 @@ class StataExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.phase, "input")
         self.assertEqual(result.error_kind, "input_error")
-        self.assertIsNotNone(result.job_dir)
-        self.assertTrue((Path(result.job_dir) / "result.json").exists())
+        result_files = list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))
+        self.assertEqual(len(result_files), 1)
 
     def test_run_inline_reports_parse_error(self) -> None:
         root = self._workspace_case_dir()
@@ -156,6 +102,7 @@ class StataExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.error_kind, "stata_parse_or_command_error")
         self.assertIn("command foo is unrecognized", result.summary)
+        self.assertIn("command foo is unrecognized", result.result_text)
 
     def test_failed_job_returns_mechanical_diagnostics(self) -> None:
         root = self._workspace_case_dir()
@@ -171,6 +118,8 @@ class StataExecutorTests(unittest.TestCase):
 
         self.assertEqual(result.error_signature, "variable mpg not found")
         self.assertEqual(result.failed_command, "regress price weight mpg")
+        self.assertNotIn(". regress price weight mpg", result.result_text)
+        self.assertIn("variable mpg not found", result.result_text)
         self.assertIn(". regress price weight mpg", result.diagnostic_excerpt)
         self.assertNotIn("__AGENT_RC__", result.diagnostic_excerpt)
 
@@ -191,7 +140,75 @@ class StataExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(result.phase, "completed")
         self.assertEqual(result.artifacts, [str((working_dir / "output" / "result.txt").resolve())])
-        self.assertTrue((working_dir / ".stata-executor" / "jobs" / result.job_id / "result.json").exists())
+        self.assertIn("wrote", result.result_text)
+        self.assertEqual(len(list((working_dir / ".stata-executor" / "jobs").glob("*/result.json"))), 1)
+
+    def test_result_text_keeps_tables_and_drops_execution_noise(self) -> None:
+        sample_log = textwrap.dedent(
+            """
+            -------------------------------------------------------------------------------
+                  name:  agentlog
+                   log:  D:/work/project/.stata-executor/jobs/job_x/run.log
+              log type:  text
+             opened on:  22 Mar 2026, 22:38:32
+
+            . cd "D:/work/project"
+            D:\\work\\project
+
+            . destring city_code year, replace
+            city_code already numeric; no replace
+
+            . outreg2 using "01-描述性统计.rtf", replace
+
+                Variable |        Obs        Mean    Std. dev.       Min        Max
+            -------------+---------------------------------------------------------
+                      FR |      1,500     .776256    .2033553   .4086425   1.340913
+                    DIFI |      1,500    2.649383    .5420632    1.55995   3.885055
+
+            Following variable is string, not included:
+            city
+            01-描述性统计.rtf
+            dir : seeout
+
+            . xtreg FR DIFI GDP OPEN INFRA i.year, fe
+
+            Fixed-effects (within) regression               Number of obs     =      1,500
+            Group variable: city_code                       Number of groups  =        150
+
+            R-squared:                                      Obs per group:
+                 Within  = 0.5200                                         min =         10
+                 Between = 0.2472                                         avg =       10.0
+                 Overall = 0.1760                                         max =         10
+
+                                                            F(13,1337)        =     111.41
+            corr(u_i, Xb) = 0.1065                          Prob > F          =     0.0000
+
+            ------------------------------------------------------------------------------
+                      FR | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+            -------------+----------------------------------------------------------------
+                    DIFI |   .0462398   .0291576     1.59   0.113    -.0109599    .1034395
+                   _cons |   .4577587   .1945558     2.35   0.019     .0760908    .8394265
+            -------------+----------------------------------------------------------------
+                 sigma_u |  .17538119
+                 sigma_e |  .06567415
+                     rho |  .87702054   (fraction of variance due to u_i)
+            ------------------------------------------------------------------------------
+            F test that all u_i=0: F(149, 1337) = 55.16                  Prob > F = 0.0000
+
+            end of do-file
+            __AGENT_RC__=0
+            """
+        ).strip()
+
+        rendered = StataExecutor()._render_result_text(sample_log)
+
+        self.assertIn("Variable |        Obs", rendered)
+        self.assertIn("Fixed-effects (within) regression", rendered)
+        self.assertIn("F test that all u_i=0", rendered)
+        self.assertNotIn("D:\\work\\project", rendered)
+        self.assertNotIn("already numeric", rendered)
+        self.assertNotIn("dir : seeout", rendered)
+        self.assertNotIn("end of do-file", rendered)
 
     def test_failed_job_still_collects_artifacts(self) -> None:
         root = self._workspace_case_dir()
@@ -235,11 +252,13 @@ class StataExecutorTests(unittest.TestCase):
 
         self.assertEqual(timed_out.error_kind, "timeout")
         self.assertEqual(succeeded.status, "succeeded")
-        self.assertNotEqual(timed_out.job_id, succeeded.job_id)
+        self.assertEqual(len(list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))), 2)
 
     def test_cli_doctor_returns_json_and_exit_code(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
         completed = subprocess.run(
-            [sys.executable, "-m", "stata_executor", "doctor"],
+            [sys.executable, "-m", "stata_executor", "doctor", "--stata-executable", str(fake_exe)],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -253,7 +272,7 @@ class StataExecutorTests(unittest.TestCase):
 
     def test_cli_argument_errors_return_stable_json(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "-m", "stata_executor", "run-inline", "--env", "INVALID"],
+            [sys.executable, "-m", "stata_executor", "run-inline", "--stata-executable", "", "--env", "INVALID"],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -269,6 +288,8 @@ class StataExecutorTests(unittest.TestCase):
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
         working_dir = root / "wd"
+        process_env = dict(os.environ)
+        process_env["STATA_EXECUTOR_STATA_EXECUTABLE"] = str(fake_exe)
         process = subprocess.Popen(
             [sys.executable, "-m", "stata_executor.adapters.mcp"],
             cwd=PROJECT_ROOT,
@@ -276,6 +297,7 @@ class StataExecutorTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=process_env,
         )
         try:
             self._send_mcp(
@@ -312,7 +334,6 @@ class StataExecutorTests(unittest.TestCase):
                             "commands": "FAKE_WRITE output/result.txt",
                             "working_dir": str(working_dir),
                             "artifact_globs": ["output/**/*.txt"],
-                            "stata_executable": str(fake_exe),
                         },
                     },
                 },
@@ -323,6 +344,7 @@ class StataExecutorTests(unittest.TestCase):
                 run_response["result"]["structuredContent"]["artifacts"],
                 [str((working_dir / "output" / "result.txt").resolve())],
             )
+            self.assertIn("wrote", run_response["result"]["structuredContent"]["result_text"])
         finally:
             if process.stdin is not None:
                 process.stdin.close()

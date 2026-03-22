@@ -8,7 +8,7 @@
 - **CLI**: 面向命令行调试和运维
 - **Python API**: 面向编程复用
 
-该工具仅负责报告执行事实：状态、阶段、退出码、日志、产物路径以及诊断摘要。它不负责解释经济学或实证结果。
+该工具返回两类信息：一类是稳定的执行事实，另一类是可直接给模型消费的干净实证结果正文。它不负责解释经济学或实证结果。
 
 ## 安装
 
@@ -18,40 +18,45 @@ uv sync
 
 ## 配置
 
-Stata 路径解析仅支持用户级配置文件或单次调用的显式覆盖。
+`stata_executor` 不再解析用户级配置文件。
 
-默认配置路径：
+- MCP: 通过 MCP 启动 JSON 的 `env` 注入环境变量。
+- CLI: 通过命令参数显式传入 Stata 路径。
 
-- **Windows**: `%APPDATA%/stata-executor/config.json`
-- **macOS**: `~/Library/Application Support/stata-executor/config.json`
-- **Linux**: `${XDG_CONFIG_HOME:-~/.config}/stata-executor/config.json`
+MCP 环境变量：
 
-配置示例：
+- `STATA_EXECUTOR_STATA_EXECUTABLE`: Stata 可执行文件路径（必填）
+- `STATA_EXECUTOR_EDITION`: 版本（可选，`mp` / `se` / `be`，默认 `mp`）
+
+示例（MCP 启动前设置环境变量）：
 
 ```json
 {
-  "stata_executable": "D:/Program Files/Stata17/StataMP-64.exe",
-  "edition": "mp",
-  "defaults": {
-    "timeout_sec": 120,
-    "artifact_globs": []
+  "mcpServers": {
+    "stata-executor": {
+      "command": "D:/Developments/PythonProject/Stata-Executor-MCP/.venv/Scripts/python.exe",
+      "args": ["-m", "stata_executor.adapters.mcp"],
+      "cwd": "D:/Developments/PythonProject/Stata-Executor-MCP",
+      "env": {
+        "STATA_EXECUTOR_STATA_EXECUTABLE": "D:/Program Files/Stata17/StataMP-64.exe",
+        "STATA_EXECUTOR_EDITION": "mp"
+      }
+    }
   }
 }
 ```
 
-参考 [`examples/config.example.json`](examples/config.example.json)。
-
 ## 命令行接口 (CLI)
 
 ```bash
-python -m stata_executor doctor
-python -m stata_executor run-do D:/work/project/analysis.do --working-dir D:/work/project
-python -m stata_executor run-inline "sysuse auto, clear\nregress price weight mpg" --working-dir D:/work/project
+python -m stata_executor doctor --stata-executable "D:/Program Files/Stata17/StataMP-64.exe"
+python -m stata_executor run-do D:/work/project/analysis.do --stata-executable "D:/Program Files/Stata17/StataMP-64.exe" --working-dir D:/work/project
+python -m stata_executor run-inline "sysuse auto, clear\nregress price weight mpg" --stata-executable "D:/Program Files/Stata17/StataMP-64.exe" --working-dir D:/work/project
 ```
 
 常用参数：
 
-- `--stata-executable`: 显式指定 Stata 可执行文件路径
+- `--stata-executable`: 显式指定 Stata 可执行文件路径（必填）
 - `--edition`: Stata 版本 (`mp`, `se`, `be`)
 - `--working-dir`: 工作目录
 - `--timeout-sec`: 超时时间（秒）
@@ -94,15 +99,10 @@ result = executor.run_do(
 - `exit_code`: 退出码
 - `error_kind`: 错误分类
 - `summary`: 执行摘要
-- `job_id`: 任务唯一标识
-- `job_dir`: 任务独立目录
-- `working_dir`: 工作目录
-- `run_log_path`: Stata 运行日志路径
-- `process_log_path`: 进程日志路径
+- `result_text`: 过滤命令回显后的完整结果正文，面向模型直接消费
 - `diagnostic_excerpt`: 关键诊断摘要
 - `error_signature`: 错误特征码 (如 r(198))
 - `failed_command`: 导致失败的命令
-- `log_tail`: 日志尾部窗口
 - `artifacts`: 生成的产物列表
 - `elapsed_ms`: 耗时（毫秒）
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any
 
@@ -20,6 +21,8 @@ class MCPServer:
     def __init__(self) -> None:
         self._executor = StataExecutor()
         self._initialized = False
+        self._env_stata_executable = os.environ.get("STATA_EXECUTOR_STATA_EXECUTABLE")
+        self._env_edition, self._env_error = _parse_env_edition(os.environ.get("STATA_EXECUTOR_EDITION"))
 
     def serve(self) -> int:
         for raw_line in sys.stdin:
@@ -88,12 +91,16 @@ class MCPServer:
         if not isinstance(arguments, dict):
             self._write_error(request_id, -32602, "Tool arguments must be an object.")
             return
+        if self._env_error:
+            self._write_error(request_id, -32602, self._env_error)
+            return
 
         try:
             if name == "doctor":
                 result = self._executor.doctor(
-                    stata_executable=_string_or_none(arguments.get("stata_executable")),
-                    edition=_string_or_none(arguments.get("edition")),
+                    stata_executable=self._env_stata_executable,
+                    edition=self._env_edition,
+                    config_source="env" if self._env_stata_executable else "missing",
                 )
                 self._write_result(request_id, _tool_result(result.to_dict(), is_error=False))
                 return
@@ -104,8 +111,8 @@ class MCPServer:
                         working_dir=_string_or_none(arguments.get("working_dir")),
                         timeout_sec=_int_or_none(arguments.get("timeout_sec")),
                         artifact_globs=tuple(_string_list(arguments.get("artifact_globs"))),
-                        edition=_string_or_none(arguments.get("edition")),
-                        stata_executable=_string_or_none(arguments.get("stata_executable")),
+                        edition=self._env_edition,
+                        stata_executable=self._env_stata_executable,
                         env_overrides=_string_map(arguments.get("env_overrides")),
                     )
                 )
@@ -118,8 +125,8 @@ class MCPServer:
                         working_dir=_string_or_none(arguments.get("working_dir")),
                         timeout_sec=_int_or_none(arguments.get("timeout_sec")),
                         artifact_globs=tuple(_string_list(arguments.get("artifact_globs"))),
-                        edition=_string_or_none(arguments.get("edition")),
-                        stata_executable=_string_or_none(arguments.get("stata_executable")),
+                        edition=self._env_edition,
+                        stata_executable=self._env_stata_executable,
                         env_overrides=_string_map(arguments.get("env_overrides")),
                     )
                 )
@@ -160,13 +167,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "doctor",
             "title": "Doctor",
-            "description": "Validate user config, report config source, and resolve the Stata executable path.",
+            "description": "Validate MCP environment configuration and resolve the Stata executable path.",
             "inputSchema": {
                 "type": "object",
-                "properties": {
-                    "stata_executable": {"type": "string"},
-                    "edition": {"type": "string", "enum": ["mp", "se", "be"]},
-                },
+                "properties": {},
             },
             "outputSchema": _doctor_output_schema(),
             "annotations": {
@@ -210,8 +214,6 @@ def _execution_input_schema(*, required: list[str]) -> dict[str, Any]:
         "working_dir": {"type": "string"},
         "timeout_sec": {"type": "integer", "minimum": 1},
         "artifact_globs": {"type": "array", "items": {"type": "string"}},
-        "edition": {"type": "string", "enum": ["mp", "se", "be"]},
-        "stata_executable": {"type": "string"},
         "env_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
     }
     if "script_path" in required:
@@ -230,15 +232,10 @@ def _execution_output_schema() -> dict[str, Any]:
             "exit_code": {"type": "integer"},
             "error_kind": {"type": ["string", "null"]},
             "summary": {"type": "string"},
-            "job_id": {"type": ["string", "null"]},
-            "job_dir": {"type": ["string", "null"]},
-            "working_dir": {"type": "string"},
-            "run_log_path": {"type": ["string", "null"]},
-            "process_log_path": {"type": ["string", "null"]},
+            "result_text": {"type": "string"},
             "diagnostic_excerpt": {"type": "string"},
             "error_signature": {"type": ["string", "null"]},
             "failed_command": {"type": ["string", "null"]},
-            "log_tail": {"type": "string"},
             "artifacts": {"type": "array", "items": {"type": "string"}},
             "elapsed_ms": {"type": "integer"},
         },
@@ -248,15 +245,10 @@ def _execution_output_schema() -> dict[str, Any]:
             "exit_code",
             "error_kind",
             "summary",
-            "job_id",
-            "job_dir",
-            "working_dir",
-            "run_log_path",
-            "process_log_path",
+            "result_text",
             "diagnostic_excerpt",
             "error_signature",
             "failed_command",
-            "log_tail",
             "artifacts",
             "elapsed_ms",
         ],
@@ -271,7 +263,7 @@ def _doctor_output_schema() -> dict[str, Any]:
             "summary": {"type": "string"},
             "config_path": {"type": "string"},
             "config_exists": {"type": "boolean"},
-            "config_source": {"type": "string", "enum": ["explicit", "user_config", "missing"]},
+            "config_source": {"type": "string", "enum": ["explicit", "env", "missing"]},
             "stata_executable": {"type": ["string", "null"]},
             "edition": {"type": ["string", "null"]},
             "defaults": {
@@ -321,21 +313,27 @@ def _int_or_none(value: Any) -> int | None:
     return value
 
 
-def _string_list(value: Any) -> list[str]:
+def _parse_env_edition(value: str | None) -> tuple[str | None, str | None]:
     if value is None:
-        return []
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise ValueError("Expected an array of strings.")
-    return value
+        return None, None
+    if value not in {"mp", "se", "be"}:
+        return None, "STATA_EXECUTOR_EDITION must be one of: mp, se, be."
+    return value, None
 
 
 def _string_map(value: Any) -> dict[str, str]:
     if value is None:
         return {}
-    if not isinstance(value, dict):
-        raise ValueError("Expected an object with string values.")
-    if any(not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()):
-        raise ValueError("Expected an object with string values.")
+    if not isinstance(value, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()):
+        raise ValueError("Expected an object of string key-value pairs.")
+    return value
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("Expected an array of strings.")
     return value
 
 

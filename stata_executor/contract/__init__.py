@@ -16,7 +16,7 @@ ErrorKind = Literal[
     "stata_runtime_error",
     "artifact_collection_error",
 ]
-ConfigSource = Literal["explicit", "user_config", "missing"]
+ConfigSource = Literal["explicit", "env", "missing"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,15 +57,10 @@ class ExecutionResult:
     exit_code: int
     error_kind: ErrorKind | None
     summary: str
-    job_id: str | None
-    job_dir: str | None
-    working_dir: str
-    run_log_path: str | None
-    process_log_path: str | None
+    result_text: str
     diagnostic_excerpt: str
     error_signature: str | None
     failed_command: str | None
-    log_tail: str
     artifacts: list[str]
     elapsed_ms: int
 

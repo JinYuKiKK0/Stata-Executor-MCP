@@ -1,8 +1,0 @@
-{
-  "stata_executable": "D:/Program Files/Stata17/StataMP-64.exe",
-  "edition": "mp",
-  "defaults": {
-    "timeout_sec": 120,
-    "artifact_globs": []
-  }
-}

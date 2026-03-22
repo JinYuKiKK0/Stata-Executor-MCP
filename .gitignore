@@ -9,6 +9,7 @@ wheels/
 logs/
 .tmp_test_runs/
 wrapper.log
-
+stata-mcp-main/
+tech_pregnant_1
 # Virtual environments
 .venv
