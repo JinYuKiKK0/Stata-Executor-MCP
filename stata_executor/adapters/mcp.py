@@ -9,7 +9,7 @@ from ..contract import RunDoRequest, RunInlineRequest
 from ..engine import StataExecutor
 
 
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-03-26")
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 SERVER_INFO = {
     "name": "stata-executor",
     "title": "Stata Executor",

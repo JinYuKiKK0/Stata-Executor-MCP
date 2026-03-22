@@ -1,27 +1,30 @@
-# stata_executor 项目背景
+# Repository Guidelines
 
-## 项目简介
+## Project Structure & Module Organization
 
-`stata_executor` 是一个可被 Agent、IDE 和本地自动化脚本复用的独立 Stata 执行能力。
-它只负责执行边界本身，不负责经济学解释、研究设计判断或数据清洗编排。
+`stata_executor/` contains the package code. Keep transport adapters in `stata_executor/adapters/` (`cli.py`, `mcp.py`), execution-facing contracts in `stata_executor/contract/`, process/runtime concerns in `stata_executor/runtime/`, and execution orchestration in `stata_executor/engine/`. `stata_executor/__main__.py` is the CLI module entrypoint.  
+`tests/` holds repository tests; `tests/test_stata_executor.py` exercises CLI, MCP, timeout, artifact collection, and fake-Stata flows end to end. Treat `.tmp_test_runs/` as disposable test output.
 
-## 核心职责
+## Build, Test, and Development Commands
 
-1. 解析用户级配置或显式传入的 Stata 路径
-2. 隔离执行 `.do` 文件或 inline Stata 命令
-3. 返回稳定的结构化执行结果，包括日志、诊断摘录和产物路径
-4. 通过 MCP、CLI 和 Python API 暴露同一套公共契约
+- `uv sync`: create/update the local Python 3.12 environment.
+- `uv run python -m unittest discover -s tests -v`: run the full test suite.
+- `uv run python -m stata_executor doctor --stata-executable "D:/Program Files/Stata17/StataMP-64.exe"`: validate the configured Stata binary.
+- `uv run python -m stata_executor run-inline "display 1" --stata-executable "..." --working-dir D:/work/project`: smoke-test CLI execution.
+- `uv run python -m stata_executor.adapters.mcp`: start the MCP server over stdio for agent integration.
 
-## 设计约束
+## Coding Style & Naming Conventions
 
-- 运行时零第三方依赖，仅使用 Python 标准库
-- 默认公共边界是 MCP over stdio
-- CLI 只做调试和运维入口
-- 不做环境变量、注册表或磁盘扫描式的 Stata 自动发现
-- 用户级配置优先，单次调用可显式覆盖
+Use Python 3.12+ and keep runtime code standard-library only. Follow PEP 8 with 4-space indentation, type hints, and small focused modules. Prefer `snake_case` for functions, variables, and module names; use `PascalCase` for request/result models and test classes. Keep public behavior stable across CLI, MCP, and Python API boundaries, and return structured machine-readable results instead of ad hoc strings.
 
-## 技术栈
+## Testing Guidelines
 
-- Python 3.12+
-- UV（仅用于开发环境管理）
-- 本机安装的 Stata
+Use `unittest`; add coverage in `tests/test_stata_executor.py` or a new `tests/test_*.py` file when behavior becomes large enough to isolate. Name tests `test_<behavior>` and assert both status fields and result payload details. Cover failure paths, timeout handling, and artifact discovery whenever execution logic changes. Use the fake Stata launcher pattern already in tests instead of requiring a real Stata install.
+
+## Commit & Pull Request Guidelines
+
+Recent history uses prefix-style subjects such as `feat:`, `refactor:`, and `update:`. Keep the first line short, imperative, and scoped to one change; avoid mixing refactors with behavior changes unless the commit message makes that explicit. PRs should describe the contract change, list affected entrypoints (`CLI`, `MCP`, `Python API`), include the test command you ran, and note any required environment variables such as `STATA_EXECUTOR_STATA_EXECUTABLE`.
+
+## Configuration & Security Tips
+
+Do not hardcode local Stata paths in source. MCP should receive configuration through environment variables, and CLI callers should pass `--stata-executable` explicitly. Keep generated logs and artifacts inside the working directory boundary unless the user requested otherwise.
