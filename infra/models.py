@@ -72,6 +72,9 @@ class JobResult:
     artifacts: list[str]
     elapsed_ms: int
     working_dir: str
+    diagnostic_excerpt: str = ""
+    error_signature: str | None = None
+    failed_command: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

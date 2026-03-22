@@ -110,6 +110,9 @@ class StataJobRunner:
                     artifacts=[],
                     elapsed_ms=result.elapsed_ms,
                     working_dir=result.working_dir,
+                    diagnostic_excerpt=result.diagnostic_excerpt,
+                    error_signature=result.error_signature,
+                    failed_command=result.failed_command,
                 )
                 return self._finalize_result(job, failed)
 
@@ -126,6 +129,9 @@ class StataJobRunner:
                 artifacts=[],
                 elapsed_ms=result.elapsed_ms,
                 working_dir=result.working_dir,
+                diagnostic_excerpt=result.diagnostic_excerpt,
+                error_signature=result.error_signature,
+                failed_command=result.failed_command,
             )
             return self._finalize_result(job, failed)
 
@@ -143,6 +149,9 @@ class StataJobRunner:
                 artifacts=artifacts,
                 elapsed_ms=result.elapsed_ms,
                 working_dir=result.working_dir,
+                diagnostic_excerpt=result.diagnostic_excerpt,
+                error_signature=result.error_signature,
+                failed_command=result.failed_command,
             )
             return self._finalize_result(job, failed)
 
@@ -159,6 +168,9 @@ class StataJobRunner:
             artifacts=artifacts,
             elapsed_ms=result.elapsed_ms,
             working_dir=result.working_dir,
+            diagnostic_excerpt=result.diagnostic_excerpt,
+            error_signature=result.error_signature,
+            failed_command=result.failed_command,
         )
         return self._finalize_result(job, succeeded)
 
@@ -171,7 +183,10 @@ class StataJobRunner:
                 phase="bootstrap",
                 exit_code=1,
                 error_kind="bootstrap_error",
-                summary="Unable to resolve a Stata executable from stata_path and edition.",
+                summary=(
+                    "Unable to resolve a Stata executable from explicit path, explicit environment "
+                    "variables, or Windows auto-discovery sources."
+                ),
                 job_dir=str(job.job_dir),
                 run_log_path=None,
                 process_log_path=None,
@@ -197,6 +212,7 @@ class StataJobRunner:
             process_log_path, process_text = self._finalize_process_log(job, self._compose_process_output(exc.stdout, exc.stderr))
             run_text = self._read_text(job.run_log_path)
             primary_text = run_text or process_text
+            diagnostic_excerpt, error_signature, failed_command = self._extract_diagnostics(primary_text, exit_code=124)
             return JobResult(
                 status="failed",
                 phase="execute",
@@ -210,6 +226,9 @@ class StataJobRunner:
                 artifacts=[],
                 elapsed_ms=elapsed_ms,
                 working_dir=str(job.working_dir),
+                diagnostic_excerpt=diagnostic_excerpt,
+                error_signature=error_signature,
+                failed_command=failed_command,
             )
         except OSError as exc:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -234,6 +253,7 @@ class StataJobRunner:
         run_text = self._read_text(job.run_log_path)
         primary_text = run_text or process_text
         exit_code = self._parse_exit_code(primary_text, fallback=completed.returncode)
+        diagnostic_excerpt, error_signature, failed_command = self._extract_diagnostics(primary_text, exit_code)
 
         if completed.returncode != 0 and not primary_text.strip():
             return JobResult(
@@ -249,6 +269,8 @@ class StataJobRunner:
                 artifacts=[],
                 elapsed_ms=elapsed_ms,
                 working_dir=str(job.working_dir),
+                diagnostic_excerpt=self._tail_text(process_text or process_output),
+                error_signature=self._extract_last_meaningful_line(process_text or process_output),
             )
 
         error_kind = None if exit_code == 0 else self._classify_execution_failure(primary_text, exit_code)
@@ -265,6 +287,9 @@ class StataJobRunner:
             artifacts=[],
             elapsed_ms=elapsed_ms,
             working_dir=str(job.working_dir),
+            diagnostic_excerpt=diagnostic_excerpt,
+            error_signature=error_signature,
+            failed_command=failed_command,
         )
 
     def _write_wrapper_do(self, job: _JobContext) -> None:
@@ -372,21 +397,9 @@ class StataJobRunner:
         if exit_code == 0:
             return "Stata do-file completed successfully."
 
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith("__AGENT_RC__") or line.startswith(". "):
-                continue
-            if line.startswith("r("):
-                continue
-            low = line.lower()
-            if "invalid syntax" in low or "unrecognized" in low or "error" in low:
-                return f"Stata execution failed with exit_code={exit_code}: {line}"
-
-        generic = [line.strip() for line in text.splitlines() if line.strip().startswith("r(")]
-        if generic:
-            return f"Stata execution failed with exit_code={exit_code}: {generic[-1]}"
+        error_signature = self._extract_error_signature(text, exit_code)
+        if error_signature:
+            return f"Stata execution failed with exit_code={exit_code}: {error_signature}"
         return f"Stata execution failed with exit_code={exit_code}."
 
     def _build_bootstrap_summary(self, text: str) -> str:
@@ -412,6 +425,90 @@ class StataJobRunner:
             return ""
         split = text.splitlines()
         return "\n".join(split[-lines:])
+
+    def _extract_diagnostics(self, text: str, exit_code: int) -> tuple[str, str | None, str | None]:
+        if not text:
+            return "", None, None
+
+        lines = text.splitlines()
+        command_start, failed_command = self._extract_last_command_block(lines)
+        error_index, error_signature = self._extract_error_signature_with_index(lines, exit_code)
+
+        if exit_code == 0:
+            excerpt_start = command_start if command_start is not None else max(len(lines) - 40, 0)
+        elif command_start is not None and error_index is not None and command_start <= error_index:
+            excerpt_start = command_start
+        elif error_index is not None:
+            excerpt_start = error_index
+        else:
+            excerpt_start = max(len(lines) - 40, 0)
+
+        excerpt_lines = self._strip_agent_rc_trailer(lines[excerpt_start:])
+        excerpt = "\n".join(excerpt_lines).strip()
+        return excerpt, error_signature, failed_command
+
+    def _extract_last_command_block(self, lines: list[str]) -> tuple[int | None, str | None]:
+        block_start: int | None = None
+        block_lines: list[str] = []
+        blocks: list[tuple[int, str]] = []
+
+        for index, raw_line in enumerate(lines):
+            if raw_line.startswith(". "):
+                if block_start is not None and block_lines:
+                    blocks.append((block_start, "\n".join(block_lines).strip()))
+                block_start = index
+                block_lines = [raw_line[2:].rstrip()]
+                continue
+
+            if raw_line.startswith("> ") and block_start is not None:
+                block_lines.append(raw_line[2:].rstrip())
+
+        if block_start is not None and block_lines:
+            blocks.append((block_start, "\n".join(block_lines).strip()))
+
+        if not blocks:
+            return None, None
+        return blocks[-1]
+
+    def _extract_error_signature_with_index(self, lines: list[str], exit_code: int) -> tuple[int | None, str | None]:
+        if exit_code == 0:
+            return None, None
+
+        final_rc_index: int | None = None
+        for index in range(len(lines) - 1, -1, -1):
+            stripped = lines[index].strip()
+            if re.fullmatch(r"r\(\d+\);?", stripped):
+                final_rc_index = index
+                break
+
+        search_end = final_rc_index if final_rc_index is not None else len(lines)
+        for index in range(search_end - 1, -1, -1):
+            stripped = lines[index].strip()
+            if not stripped:
+                continue
+            if stripped.startswith("__AGENT_RC__") or stripped.startswith("r("):
+                continue
+            if lines[index].startswith(". ") or lines[index].startswith("> "):
+                continue
+            return index, stripped
+        return None, None
+
+    def _extract_error_signature(self, text: str, exit_code: int) -> str | None:
+        _, signature = self._extract_error_signature_with_index(text.splitlines(), exit_code)
+        return signature
+
+    def _extract_last_meaningful_line(self, text: str) -> str | None:
+        for raw_line in reversed(text.splitlines()):
+            stripped = raw_line.strip()
+            if stripped:
+                return stripped
+        return None
+
+    def _strip_agent_rc_trailer(self, lines: list[str]) -> list[str]:
+        trimmed = list(lines)
+        while trimmed and trimmed[-1].strip().startswith("__AGENT_RC__"):
+            trimmed.pop()
+        return trimmed
 
     def _finalize_result(self, job: _JobContext, result: JobResult) -> JobResult:
         job.result_path.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")

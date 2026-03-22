@@ -8,6 +8,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from unittest import mock
 import uuid
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +86,59 @@ class StataJobRunnerTests(unittest.TestCase):
 
         self.assertEqual(resolved, headless.resolve())
 
+    def test_executable_resolution_uses_explicit_environment_path_when_present(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+
+        with mock.patch.dict(os.environ, {"STATA_PATH": str(fake_exe)}, clear=False):
+            resolved = resolve_stata_executable(None, "mp")
+
+        self.assertEqual(resolved, fake_exe.resolve())
+
+    @unittest.skipUnless(os.name == "nt", "Windows auto-discovery is only exercised on Windows")
+    def test_executable_resolution_uses_registry_candidates_when_no_explicit_config(self) -> None:
+        root = self._workspace_case_dir()
+        install_dir = root / "registered" / "Stata18"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        headless = install_dir / "StataMP-console.exe"
+        headless.write_text("", encoding="utf-8")
+
+        with mock.patch("infra.executable_resolver._iter_windows_registry_candidates", return_value=[install_dir]):
+            with mock.patch("infra.executable_resolver._iter_common_windows_install_dirs", return_value=[]):
+                with mock.patch.dict(os.environ, {}, clear=False):
+                    resolved = resolve_stata_executable(None, "mp")
+
+        self.assertEqual(resolved, headless.resolve())
+
+    @unittest.skipUnless(os.name == "nt", "Windows auto-discovery is only exercised on Windows")
+    def test_executable_resolution_uses_common_install_dirs_when_registry_is_empty(self) -> None:
+        root = self._workspace_case_dir()
+        program_files = root / "ProgramFiles"
+        install_dir = program_files / "Stata18"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        gui = install_dir / "StataMP-64.exe"
+        headless = install_dir / "StataMP-console.exe"
+        gui.write_text("", encoding="utf-8")
+        headless.write_text("", encoding="utf-8")
+
+        with mock.patch("infra.executable_resolver._iter_windows_registry_candidates", return_value=[]):
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "ProgramFiles": str(program_files),
+                    "ProgramFiles(x86)": "",
+                    "STATA_PATH": "",
+                    "STATA_EXE": "",
+                    "STATA_HOME": "",
+                    "STATA_MP_PATH": "",
+                    "STATA_MP_EXE": "",
+                },
+                clear=False,
+            ):
+                resolved = resolve_stata_executable(None, "mp")
+
+        self.assertEqual(resolved, headless.resolve())
+
     def test_wrapper_requests_full_stata_exit_and_windows_batch_flags(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
@@ -157,6 +211,51 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertEqual(result.error_kind, "stata_parse_or_command_error")
         self.assertIn("command foo is unrecognized", result.summary)
         self.assertNotEqual(result.summary.strip(), "Stata execution failed with exit_code=199: r(199);")
+
+    def test_failed_job_returns_mechanical_diagnostics(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+        runner = StataJobRunner(
+            StataConfig(
+                stata_path=str(fake_exe),
+                working_dir=root / "wd",
+                job_root=root / "jobs",
+            )
+        )
+
+        result = runner.run_inline(
+            "regress price weight mpg\nFAKE_ERROR 111|variable mpg not found",
+            JobSpec(timeout_sec=5),
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_signature, "variable mpg not found")
+        self.assertEqual(result.failed_command, "regress price weight mpg")
+        self.assertIn(". regress price weight mpg", result.diagnostic_excerpt)
+        self.assertIn("variable mpg not found", result.diagnostic_excerpt)
+        self.assertNotIn("__AGENT_RC__", result.diagnostic_excerpt)
+
+    def test_success_job_returns_last_command_diagnostic_excerpt_without_semantic_parsing(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+        runner = StataJobRunner(
+            StataConfig(
+                stata_path=str(fake_exe),
+                working_dir=root / "wd",
+                job_root=root / "jobs",
+            )
+        )
+
+        result = runner.run_inline(
+            "display 1\nsummarize price",
+            JobSpec(timeout_sec=5),
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIsNone(result.error_signature)
+        self.assertEqual(result.failed_command, "summarize price")
+        self.assertIn(". summarize price", result.diagnostic_excerpt)
+        self.assertNotIn("__AGENT_RC__", result.diagnostic_excerpt)
 
     def test_failed_job_still_collects_artifacts(self) -> None:
         root = self._workspace_case_dir()
@@ -248,6 +347,126 @@ class StataJobRunnerTests(unittest.TestCase):
         self.assertIsNone(payload["job_dir"])
         self.assertIsNone(payload["run_log_path"])
         self.assertIsNone(payload["process_log_path"])
+        self.assertEqual(payload["diagnostic_excerpt"], "")
+        self.assertIsNone(payload["error_signature"])
+        self.assertIsNone(payload["failed_command"])
+
+    def test_skill_wrapper_runs_job_via_repo_cli(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+        fake_uv = self._create_fake_uv_executable(root)
+        working_dir = root / "skill-work"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        script_path = working_dir / "analysis.do"
+        script_path.write_text("FAKE_WRITE output/result.txt\n", encoding="utf-8")
+        skill_script = PROJECT_ROOT / "skills" / "stata-job-runner" / "scripts" / "run_stata_job.py"
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(skill_script),
+                "run-do",
+                str(script_path),
+                "--repo-root",
+                str(PROJECT_ROOT),
+                "--uv-path",
+                str(fake_uv),
+                "--stata-path",
+                str(fake_exe),
+                "--working-dir",
+                str(working_dir),
+                "--job-root",
+                str(root / "jobs"),
+                "--artifact-glob",
+                "output/**/*.txt",
+                "--compact",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stderr.strip(), "")
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertEqual(payload["process_log_path"], None)
+        self.assertEqual(
+            payload["artifacts"],
+            [str((working_dir / "output" / "result.txt").resolve())],
+        )
+
+    def test_skill_wrapper_falls_back_to_repo_venv_python_when_uv_is_missing(self) -> None:
+        root = self._workspace_case_dir()
+        repo_root = self._create_minimal_repo(root, summary="ok-from-venv")
+        self._create_fake_repo_python(repo_root)
+        skill_script = PROJECT_ROOT / "skills" / "stata-job-runner" / "scripts" / "run_stata_job.py"
+        empty_home = root / "home"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["PATH"] = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
+        env["HOME"] = str(empty_home)
+        env["USERPROFILE"] = str(empty_home)
+        env["UV_EXE"] = ""
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(skill_script),
+                "run-inline",
+                "display 1",
+                "--repo-root",
+                str(repo_root),
+                "--compact",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertEqual(payload["summary"], "ok-from-venv")
+
+    def test_skill_wrapper_returns_bootstrap_json_when_no_runner_is_available(self) -> None:
+        root = self._workspace_case_dir()
+        repo_root = self._create_minimal_repo(root)
+        skill_script = PROJECT_ROOT / "skills" / "stata-job-runner" / "scripts" / "run_stata_job.py"
+        empty_home = root / "home"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["PATH"] = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
+        env["HOME"] = str(empty_home)
+        env["USERPROFILE"] = str(empty_home)
+        env["UV_EXE"] = ""
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(skill_script),
+                "run-inline",
+                "display 1",
+                "--repo-root",
+                str(repo_root),
+                "--compact",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["phase"], "bootstrap")
+        self.assertEqual(payload["error_kind"], "bootstrap_error")
+        self.assertIn("Cannot locate a working uv executable or repo-local .venv Python", payload["summary"])
 
     def _create_fake_stata_executable(self, root: Path) -> Path:
         fake_py = root / "fake_stata.py"
@@ -300,7 +519,7 @@ class StataJobRunnerTests(unittest.TestCase):
                             lines.append(message)
                             lines.append(f"r({rc});")
                             break
-                        lines.append(line)
+                        lines.append(f". {line}")
 
                     lines.append(f"__AGENT_RC__={rc}")
                     run_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,6 +541,87 @@ class StataJobRunnerTests(unittest.TestCase):
         fake_cmd = root / "fake_stata.cmd"
         fake_cmd.write_text(
             f'@echo off\r\n"{sys.executable}" "%~dp0fake_stata.py" %*\r\n',
+            encoding="utf-8",
+        )
+        return fake_cmd
+
+    def _create_minimal_repo(self, root: Path, summary: str = "ok") -> Path:
+        repo_root = root / "mini-repo"
+        (repo_root / "infra").mkdir(parents=True, exist_ok=True)
+        (repo_root / "infra" / "__init__.py").write_text("# test repo marker\n", encoding="utf-8")
+        payload = {
+            "status": "succeeded",
+            "phase": "completed",
+            "exit_code": 0,
+            "error_kind": None,
+            "summary": summary,
+            "job_dir": None,
+            "run_log_path": None,
+            "process_log_path": None,
+            "log_tail": "",
+            "artifacts": [],
+            "elapsed_ms": 0,
+            "working_dir": str(repo_root),
+            "diagnostic_excerpt": "",
+            "error_signature": None,
+            "failed_command": None,
+        }
+        main_text = textwrap.dedent(
+            f"""
+            from __future__ import annotations
+
+            import json
+
+
+            if __name__ == "__main__":
+                print(json.dumps({payload!r}, ensure_ascii=False))
+            """
+        ).strip() + "\n"
+        (repo_root / "main.py").write_text(main_text, encoding="utf-8")
+        return repo_root
+
+    def _create_fake_repo_python(self, repo_root: Path) -> Path:
+        scripts_dir = repo_root / ".venv" / "Scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        fake_cmd = scripts_dir / "python.cmd"
+        fake_cmd.write_text(
+            f'@echo off\r\n"{sys.executable}" %*\r\n',
+            encoding="utf-8",
+        )
+        return fake_cmd
+
+    def _create_fake_uv_executable(self, root: Path) -> Path:
+        fake_py = root / "fake_uv.py"
+        fake_py.write_text(
+            textwrap.dedent(
+                """
+                from __future__ import annotations
+
+                import subprocess
+                import sys
+
+
+                def main() -> int:
+                    args = sys.argv[1:]
+                    if args == ["--version"]:
+                        print("uv 0.fake")
+                        return 0
+                    if args and args[0] == "run":
+                        args = args[1:]
+                    completed = subprocess.run(args, check=False)
+                    return completed.returncode
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_cmd = root / "fake_uv.cmd"
+        fake_cmd.write_text(
+            f'@echo off\r\n"{sys.executable}" "%~dp0fake_uv.py" %*\r\n',
             encoding="utf-8",
         )
         return fake_cmd

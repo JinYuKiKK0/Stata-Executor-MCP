@@ -121,6 +121,9 @@ def _emit_cli_argument_error(message: str, exit_code: int = 2) -> None:
         "artifacts": [],
         "elapsed_ms": 0,
         "working_dir": str(Path.cwd()),
+        "diagnostic_excerpt": "",
+        "error_signature": None,
+        "failed_command": None,
     }
     print(json.dumps(payload, ensure_ascii=False))
 

@@ -61,6 +61,9 @@
 - `run_log_path`
 - `process_log_path`
 - `log_tail`
+- `diagnostic_excerpt`
+- `error_signature`
+- `failed_command`
 - `artifacts`
 - `elapsed_ms`
 - `working_dir`
@@ -72,6 +75,8 @@
 - 报错发生在输入、启动、执行还是产物收集阶段
 - 主日志和外层进程日志分别在哪里
 - 即便执行失败，过程中已经生成了哪些产物
+- 哪段机械诊断摘录最值得先看
+- 最近一条命令和首条高信号错误是什么
 
 ## Python 调用
 
@@ -102,6 +107,9 @@ print(result.summary)
 print(result.run_log_path)
 print(result.process_log_path)
 print(result.log_tail)
+print(result.diagnostic_excerpt)
+print(result.error_signature)
+print(result.failed_command)
 ```
 
 运行 inline 命令时，runner 会先物化成 `input.do`，再以隔离 job 执行：
@@ -167,6 +175,14 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 - 如果本机只有 `StataMP-64.exe`，runner 仍会使用它
 - 如果将来安装目录里同时存在 console/batch 入口，runner 会优先选它们
 
+当 `stata_path` 未显式提供时，runner 会继续尝试：
+
+- 显式环境变量，如 `STATA_PATH`、`STATA_EXE` 和 edition-specific 变量
+- Windows 注册表中的 Stata 17/18 安装信息
+- 常见安装目录，如 `%ProgramFiles%\Stata17`、`%ProgramFiles%\Stata18`
+
+显式路径或显式环境变量优先；自动发现只作为缺省补偿。
+
 ## 测试
 
 当前仓库包含基于 fake Stata 可执行文件的行为测试，覆盖：
@@ -186,3 +202,18 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+## Codex Skill
+
+仓库内置了一个可复用 skill 源目录：
+
+- `skills/stata-job-runner/`
+
+它把当前执行基础设施封装成给其他 Agent 调用的稳定入口：
+
+- `SKILL.md`: skill 工作流与使用边界
+- `scripts/run_stata_job.py`: 优先走 `uv run python main.py ... --json`，必要时降级到 repo `.venv` Python 的包装脚本
+- `references/contract.md`: 输入、输出、日志、依赖与路径解析约定
+- `references/mcp-contract.md`: 未来 MCP 工具面与结果协议的收敛目标
+
+这个 skill 现在是过渡性的调用层，不是最终产品边界；长期公共边界应迁移为 MCP。
