@@ -1,4 +1,0 @@
-interface:
-  display_name: "Stata Job Runner"
-  short_description: "Run local Stata jobs via StataAgent"
-  default_prompt: "Use $stata-job-runner to run a local Stata .do file or inline Stata commands through the StataAgent executor."

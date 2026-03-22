@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+
+from ..contract import Edition
 
 
 _EDITION_PREFIX = {
@@ -14,21 +15,16 @@ _HEADLESS_HINTS = ("console", "batch", "automation", "headless")
 
 
 def resolve_stata_executable(
-    stata_path: str | None,
-    edition: Literal["mp", "se", "be"],
+    stata_executable: str | None,
+    edition: Edition,
 ) -> Path | None:
-    """Resolve Stata executable only from explicit user-provided path."""
-
-    if not stata_path:
+    if not stata_executable:
         return None
 
-    return _resolve_candidate(Path(stata_path).expanduser(), edition)
+    return _resolve_candidate(Path(stata_executable).expanduser(), edition)
 
 
-def find_preferred_executable(
-    directory: Path,
-    edition: Literal["mp", "se", "be"],
-) -> Path | None:
+def find_preferred_executable(directory: Path, edition: Edition) -> Path | None:
     if not directory.exists() or not directory.is_dir():
         return None
 
@@ -54,10 +50,7 @@ def build_stata_command(executable: Path, wrapper_do_path: Path) -> list[str]:
     return [str(executable), "-b", "do", str(wrapper_do_path)]
 
 
-def _resolve_candidate(
-    path: Path,
-    edition: Literal["mp", "se", "be"],
-) -> Path | None:
+def _resolve_candidate(path: Path, edition: Edition) -> Path | None:
     if path.exists() and path.is_file():
         preferred = find_preferred_executable(path.parent, edition)
         if preferred is not None:

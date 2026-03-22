@@ -1,9 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
 [project]
-name = "stataagent"
+name = "stata-executor"
 version = "0.1.0"
-description = "Add your description here"
+description = "Zero-dependency Stata execution kernel with CLI and MCP adapters."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-	"pandas>=2.2.0",
-]
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.scripts]
+stata-executor = "stata_executor.adapters.cli:main"
+stata-executor-mcp = "stata_executor.adapters.mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["stata_executor"]
