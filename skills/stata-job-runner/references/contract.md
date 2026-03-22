@@ -26,14 +26,9 @@ It validates each candidate before using it. If no `uv` candidate works but the 
 
 ## Stata Resolution
 
-The underlying runner resolves the Stata executable in this order:
+The underlying runner resolves the Stata executable only from `--stata-path`.
 
-1. `--stata-path`
-2. Explicit environment variables such as `STATA_PATH`, `STATA_EXE`, and edition-specific variants
-3. Windows registry discovery for Stata 17/18
-4. Common Windows install directories such as `%ProgramFiles%\Stata17` and `%ProgramFiles%\Stata18`
-
-Explicit path or explicit environment configuration is authoritative. Auto-discovery is only a fallback when no explicit configuration is present.
+If `--stata-path` is missing or points to a non-existent target, the runner returns a stable `bootstrap_error` JSON payload. It does not read `STATA_PATH`/`STATA_EXE`, Windows registry, or common install directories.
 
 ## Command Surface
 

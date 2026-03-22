@@ -47,7 +47,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-root", help="Path to the StataAgent repository")
     parser.add_argument("--uv-path", help="Path to a working uv executable")
     parser.add_argument("--edition", default="mp", choices=("mp", "se", "be"))
-    parser.add_argument("--stata-path", help="Path to the Stata executable or install directory")
+    parser.add_argument(
+        "--stata-path",
+        required=True,
+        help="Path to the Stata executable or install directory",
+    )
     parser.add_argument("--working-dir", help="Base working directory for relative inputs and outputs")
     parser.add_argument("--job-root", help="Directory where job manifests and logs are written")
     parser.add_argument("--timeout-sec", type=int, help="Hard timeout in seconds")

@@ -8,7 +8,6 @@ import subprocess
 import sys
 import textwrap
 import unittest
-from unittest import mock
 import uuid
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -86,58 +85,10 @@ class StataJobRunnerTests(unittest.TestCase):
 
         self.assertEqual(resolved, headless.resolve())
 
-    def test_executable_resolution_uses_explicit_environment_path_when_present(self) -> None:
-        root = self._workspace_case_dir()
-        fake_exe = self._create_fake_stata_executable(root)
+    def test_executable_resolution_returns_none_without_explicit_stata_path(self) -> None:
+        resolved = resolve_stata_executable(None, "mp")
 
-        with mock.patch.dict(os.environ, {"STATA_PATH": str(fake_exe)}, clear=False):
-            resolved = resolve_stata_executable(None, "mp")
-
-        self.assertEqual(resolved, fake_exe.resolve())
-
-    @unittest.skipUnless(os.name == "nt", "Windows auto-discovery is only exercised on Windows")
-    def test_executable_resolution_uses_registry_candidates_when_no_explicit_config(self) -> None:
-        root = self._workspace_case_dir()
-        install_dir = root / "registered" / "Stata18"
-        install_dir.mkdir(parents=True, exist_ok=True)
-        headless = install_dir / "StataMP-console.exe"
-        headless.write_text("", encoding="utf-8")
-
-        with mock.patch("infra.executable_resolver._iter_windows_registry_candidates", return_value=[install_dir]):
-            with mock.patch("infra.executable_resolver._iter_common_windows_install_dirs", return_value=[]):
-                with mock.patch.dict(os.environ, {}, clear=False):
-                    resolved = resolve_stata_executable(None, "mp")
-
-        self.assertEqual(resolved, headless.resolve())
-
-    @unittest.skipUnless(os.name == "nt", "Windows auto-discovery is only exercised on Windows")
-    def test_executable_resolution_uses_common_install_dirs_when_registry_is_empty(self) -> None:
-        root = self._workspace_case_dir()
-        program_files = root / "ProgramFiles"
-        install_dir = program_files / "Stata18"
-        install_dir.mkdir(parents=True, exist_ok=True)
-        gui = install_dir / "StataMP-64.exe"
-        headless = install_dir / "StataMP-console.exe"
-        gui.write_text("", encoding="utf-8")
-        headless.write_text("", encoding="utf-8")
-
-        with mock.patch("infra.executable_resolver._iter_windows_registry_candidates", return_value=[]):
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "ProgramFiles": str(program_files),
-                    "ProgramFiles(x86)": "",
-                    "STATA_PATH": "",
-                    "STATA_EXE": "",
-                    "STATA_HOME": "",
-                    "STATA_MP_PATH": "",
-                    "STATA_MP_EXE": "",
-                },
-                clear=False,
-            ):
-                resolved = resolve_stata_executable(None, "mp")
-
-        self.assertEqual(resolved, headless.resolve())
+        self.assertIsNone(resolved)
 
     def test_wrapper_requests_full_stata_exit_and_windows_batch_flags(self) -> None:
         root = self._workspace_case_dir()
@@ -330,7 +281,17 @@ class StataJobRunnerTests(unittest.TestCase):
 
     def test_cli_argument_errors_return_stable_json_protocol(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "main.py", "run-inline", "display 1", "--env", "INVALID", "--json"],
+            [
+                sys.executable,
+                "main.py",
+                "run-inline",
+                "display 1",
+                "--stata-path",
+                "D:/missing/stata.exe",
+                "--env",
+                "INVALID",
+                "--json",
+            ],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -418,6 +379,8 @@ class StataJobRunnerTests(unittest.TestCase):
                 "display 1",
                 "--repo-root",
                 str(repo_root),
+                "--stata-path",
+                "D:/missing/stata.exe",
                 "--compact",
             ],
             cwd=root,
@@ -452,6 +415,8 @@ class StataJobRunnerTests(unittest.TestCase):
                 "display 1",
                 "--repo-root",
                 str(repo_root),
+                "--stata-path",
+                "D:/missing/stata.exe",
                 "--compact",
             ],
             cwd=root,

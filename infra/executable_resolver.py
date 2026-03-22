@@ -4,29 +4,12 @@ import os
 from pathlib import Path
 from typing import Literal
 
-try:
-    import winreg
-except ImportError:  # pragma: no cover - non-Windows import guard
-    winreg = None
-
 
 _EDITION_PREFIX = {
     "mp": "statamp",
     "se": "statase",
     "be": "statabe",
 }
-_EDITION_ENV_VARS = {
-    "mp": ("STATA_MP_PATH", "STATA_MP_EXE"),
-    "se": ("STATA_SE_PATH", "STATA_SE_EXE"),
-    "be": ("STATA_BE_PATH", "STATA_BE_EXE"),
-}
-_GENERIC_ENV_VARS = ("STATA_PATH", "STATA_EXE", "STATA_HOME")
-_WINDOWS_PRODUCT_NAMES = {
-    "mp": ("StataMP",),
-    "se": ("StataSE",),
-    "be": ("StataBE", "Stata"),
-}
-_WINDOWS_VERSIONS = ("18", "17")
 _HEADLESS_HINTS = ("console", "batch", "automation", "headless")
 
 
@@ -34,24 +17,12 @@ def resolve_stata_executable(
     stata_path: str | None,
     edition: Literal["mp", "se", "be"],
 ) -> Path | None:
-    """Resolve the best available Stata executable for subprocess execution."""
+    """Resolve Stata executable only from explicit user-provided path."""
 
-    if stata_path:
-        return _resolve_candidate(Path(stata_path).expanduser(), edition)
-
-    explicit_env_candidates = list(_iter_explicit_env_candidates(edition))
-    if explicit_env_candidates:
-        for candidate in explicit_env_candidates:
-            resolved = _resolve_candidate(candidate, edition)
-            if resolved is not None:
-                return resolved
+    if not stata_path:
         return None
 
-    for candidate in _iter_auto_discovery_candidates(edition):
-        resolved = _resolve_candidate(candidate, edition)
-        if resolved is not None:
-            return resolved
-    return None
+    return _resolve_candidate(Path(stata_path).expanduser(), edition)
 
 
 def find_preferred_executable(
@@ -97,76 +68,3 @@ def _resolve_candidate(
         return find_preferred_executable(path, edition)
 
     return None
-
-
-def _iter_explicit_env_candidates(edition: Literal["mp", "se", "be"]) -> list[Path]:
-    candidates: list[Path] = []
-    for key in (*_EDITION_ENV_VARS[edition], *_GENERIC_ENV_VARS):
-        value = os.getenv(key)
-        if value:
-            candidates.append(Path(value).expanduser())
-    return _dedupe_paths(candidates)
-
-
-def _iter_auto_discovery_candidates(edition: Literal["mp", "se", "be"]) -> list[Path]:
-    candidates: list[Path] = []
-    if os.name == "nt":
-        candidates.extend(_iter_windows_registry_candidates(edition))
-        candidates.extend(_iter_common_windows_install_dirs())
-    return _dedupe_paths(candidates)
-
-
-def _iter_windows_registry_candidates(
-    edition: Literal["mp", "se", "be"],
-) -> list[Path]:
-    if os.name != "nt" or winreg is None:
-        return []
-
-    candidates: list[Path] = []
-    hives = (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE)
-    prefixes = ("SOFTWARE", r"SOFTWARE\WOW6432Node")
-
-    for hive in hives:
-        for prefix in prefixes:
-            for product in _WINDOWS_PRODUCT_NAMES[edition]:
-                for version in _WINDOWS_VERSIONS:
-                    key_path = f"{prefix}\\StataCorp\\{product}{version}"
-                    try:
-                        with winreg.OpenKey(hive, key_path) as key:
-                            for value_name in ("StataEXE", "InstallPath"):
-                                try:
-                                    value, _ = winreg.QueryValueEx(key, value_name)
-                                except OSError:
-                                    continue
-                                if isinstance(value, str) and value.strip():
-                                    candidates.append(Path(value).expanduser())
-                    except OSError:
-                        continue
-
-    return _dedupe_paths(candidates)
-
-
-def _iter_common_windows_install_dirs() -> list[Path]:
-    roots: list[Path] = []
-    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
-        value = os.getenv(env_name)
-        if value:
-            roots.append(Path(value).expanduser())
-
-    candidates: list[Path] = []
-    for root in _dedupe_paths(roots):
-        for version in _WINDOWS_VERSIONS:
-            candidates.append(root / f"Stata{version}")
-    return _dedupe_paths(candidates)
-
-
-def _dedupe_paths(paths: list[Path]) -> list[Path]:
-    seen: set[str] = set()
-    unique: list[Path] = []
-    for path in paths:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique

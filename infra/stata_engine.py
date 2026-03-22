@@ -183,10 +183,7 @@ class StataJobRunner:
                 phase="bootstrap",
                 exit_code=1,
                 error_kind="bootstrap_error",
-                summary=(
-                    "Unable to resolve a Stata executable from explicit path, explicit environment "
-                    "variables, or Windows auto-discovery sources."
-                ),
+                summary="Unable to resolve a Stata executable from explicit --stata-path/stata_path.",
                 job_dir=str(job.job_dir),
                 run_log_path=None,
                 process_log_path=None,

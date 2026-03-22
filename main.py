@@ -28,7 +28,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--stata-path",
         type=str,
-        default=None,
+        required=True,
         help="Path to the Stata executable or installation directory.",
     )
     parser.add_argument(

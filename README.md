@@ -144,7 +144,7 @@ python main.py run-inline "sysuse auto, clear" --stata-path "D:/Program Files/St
 ### 机器调用
 
 ```bash
-python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata17/StataMP-64.exe" --json
+python main.py run-do D:/orders/Archive/stata/tech_pregnant_1/scripts/analysis.do --stata-path "D:/Program Files/Stata17/StataMP-64.exe" --json
 ```
 
 失败时 CLI 会返回非零退出码；标准输出始终是 `JobResult` JSON。
@@ -175,13 +175,7 @@ python main.py run-do ./path/to/analysis.do --stata-path "D:/Program Files/Stata
 - 如果本机只有 `StataMP-64.exe`，runner 仍会使用它
 - 如果将来安装目录里同时存在 console/batch 入口，runner 会优先选它们
 
-当 `stata_path` 未显式提供时，runner 会继续尝试：
-
-- 显式环境变量，如 `STATA_PATH`、`STATA_EXE` 和 edition-specific 变量
-- Windows 注册表中的 Stata 17/18 安装信息
-- 常见安装目录，如 `%ProgramFiles%\Stata17`、`%ProgramFiles%\Stata18`
-
-显式路径或显式环境变量优先；自动发现只作为缺省补偿。
+`stata_path` 是强制配置项。未显式提供时，runner 会直接返回 `bootstrap_error`，不会读取环境变量、Windows 注册表或常见安装目录进行自动发现。
 
 ## 测试
 

@@ -16,7 +16,7 @@ This skill is a transitional wrapper around the local StataAgent repository. The
 - `timeout_sec`
 - `artifact_globs`
 - `env_overrides`
-- `stata_path` as an optional explicit override
+- `stata_path` as a required explicit input
 
 `run_inline`:
 
@@ -25,7 +25,7 @@ This skill is a transitional wrapper around the local StataAgent repository. The
 - `timeout_sec`
 - `artifact_globs`
 - `env_overrides`
-- `stata_path` as an optional explicit override
+- `stata_path` as a required explicit input
 
 ## Target Output
 

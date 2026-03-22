@@ -24,7 +24,7 @@ Use the local StataAgent repository as an execution service. This skill is a tra
 1. Resolve inputs.
    - Resolve the installed skill directory first, then call its wrapper script by absolute path.
    - Use `--repo-root` whenever the current directory is not the StataAgent repo and auto-detection may not find the clone.
-   - Use `--stata-path` when the local Stata executable cannot be resolved automatically; otherwise let the runner try explicit env vars and Windows auto-discovery.
+   - Always pass `--stata-path`. The runner does not perform environment-variable or Windows auto-discovery fallback.
    - Set `--working-dir` to the directory that owns relative scripts, data, and outputs.
 2. Execute the job.
    - Existing script:
