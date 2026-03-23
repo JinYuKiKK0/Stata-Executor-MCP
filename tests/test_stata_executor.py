@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from stata_executor import RunDoRequest, RunInlineRequest, StataExecutor
+from stata_executor.engine.output_parser import render_result_text
 from stata_executor.runtime.executable_resolver import build_stata_command, resolve_stata_executable
 
 
@@ -200,7 +201,7 @@ class StataExecutorTests(unittest.TestCase):
             """
         ).strip()
 
-        rendered = StataExecutor()._render_result_text(sample_log)
+        rendered = render_result_text(sample_log)
 
         self.assertIn("Variable |        Obs", rendered)
         self.assertIn("Fixed-effects (within) regression", rendered)

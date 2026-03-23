@@ -13,4 +13,4 @@ resolution-markers = [
 [[package]]
 name = "stata-executor"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
