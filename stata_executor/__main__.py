@@ -1,4 +1,4 @@
-from .adapters.cli import main
+from .adapters.mcp import main
 
 
 if __name__ == "__main__":

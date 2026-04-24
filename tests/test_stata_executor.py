@@ -14,7 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from stata_executor import RunDoRequest, RunInlineRequest, StataExecutor
+from stata_executor.contract import RunDoRequest, RunInlineRequest
+from stata_executor.engine import StataExecutor
 from stata_executor.engine.output_parser import render_result_text
 from stata_executor.runtime.executable_resolver import build_stata_command, resolve_stata_executable
 
@@ -255,106 +256,65 @@ class StataExecutorTests(unittest.TestCase):
         self.assertEqual(succeeded.status, "succeeded")
         self.assertEqual(len(list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))), 2)
 
-    def test_cli_doctor_returns_json_and_exit_code(self) -> None:
-        root = self._workspace_case_dir()
-        fake_exe = self._create_fake_stata_executable(root)
-        completed = subprocess.run(
-            [sys.executable, "-m", "stata_executor", "doctor", "--stata-executable", str(fake_exe)],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
+    def test_mcp_adapter_tools_list_and_call_doctor(self) -> None:
+        import asyncio
+        from stata_executor.adapters.mcp import _call_tool, _list_tools
+
+        tools = asyncio.run(_list_tools())
+        self.assertEqual({t.name for t in tools}, {"doctor", "run_do", "run_inline"})
+
+        result = asyncio.run(_call_tool("doctor", {}))
+        self.assertFalse(result.isError)
+        self.assertEqual(
+            set(result.structuredContent.keys()),
+            {
+                "ready",
+                "summary",
+                "config_path",
+                "config_exists",
+                "config_source",
+                "stata_executable",
+                "edition",
+                "defaults",
+                "errors",
+            },
         )
 
-        self.assertEqual(completed.stderr.strip(), "")
-        payload = json.loads(completed.stdout)
-        self.assertIn("ready", payload)
-        self.assertIn(completed.returncode, {0, 1})
+    def test_mcp_adapter_run_inline_via_fake_stata(self) -> None:
+        import asyncio
+        from stata_executor.adapters import mcp as mcp_adapter
+        from stata_executor.adapters.mcp import _call_tool
 
-    def test_cli_argument_errors_return_stable_json(self) -> None:
-        completed = subprocess.run(
-            [sys.executable, "-m", "stata_executor", "run-inline", "--stata-executable", "", "--env", "INVALID"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(completed.returncode, 2)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["phase"], "input")
-        self.assertEqual(payload["error_kind"], "input_error")
-
-    def test_mcp_server_lists_tools_and_runs_inline(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)
         working_dir = root / "wd"
-        process_env = dict(os.environ)
-        process_env["STATA_EXECUTOR_STATA_EXECUTABLE"] = str(fake_exe)
-        process = subprocess.Popen(
-            [sys.executable, "-m", "stata_executor.adapters.mcp"],
-            cwd=PROJECT_ROOT,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=process_env,
+
+        previous_env = mcp_adapter._env
+        mcp_adapter._env = mcp_adapter._EnvConfig(
+            stata_executable=str(fake_exe),
+            edition=None,
+            env_error=None,
         )
         try:
-            self._send_mcp(
-                process,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {},
-                        "clientInfo": {"name": "test", "version": "1.0"},
+            result = asyncio.run(
+                _call_tool(
+                    "run_inline",
+                    {
+                        "commands": "FAKE_WRITE output/result.txt",
+                        "working_dir": str(working_dir),
+                        "artifact_globs": ["output/**/*.txt"],
                     },
-                },
+                )
             )
-            init_response = self._read_mcp(process)
-            self.assertEqual(init_response["result"]["serverInfo"]["name"], "stata-executor")
-
-            self._send_mcp(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-            self._send_mcp(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-            list_response = self._read_mcp(process)
-            names = {tool["name"] for tool in list_response["result"]["tools"]}
-            self.assertEqual(names, {"doctor", "run_do", "run_inline"})
-
-            self._send_mcp(
-                process,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 3,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "run_inline",
-                        "arguments": {
-                            "commands": "FAKE_WRITE output/result.txt",
-                            "working_dir": str(working_dir),
-                            "artifact_globs": ["output/**/*.txt"],
-                        },
-                    },
-                },
-            )
-            run_response = self._read_mcp(process)
-            self.assertFalse(run_response["result"]["isError"])
-            self.assertEqual(
-                run_response["result"]["structuredContent"]["artifacts"],
-                [str((working_dir / "output" / "result.txt").resolve())],
-            )
-            self.assertIn("wrote", run_response["result"]["structuredContent"]["result_text"])
         finally:
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
-            process.terminate()
-            process.wait(timeout=5)
+            mcp_adapter._env = previous_env
+
+        self.assertFalse(result.isError)
+        self.assertEqual(
+            result.structuredContent["artifacts"],
+            [str((working_dir / "output" / "result.txt").resolve())],
+        )
+        self.assertIn("wrote", result.structuredContent["result_text"])
 
     def _create_fake_stata_executable(self, root: Path) -> Path:
         fake_py = root / "fake_stata.py"

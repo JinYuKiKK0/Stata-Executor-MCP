@@ -1,3 +1,3 @@
-from .executor import StataExecutor, doctor, run_do, run_inline
+from .executor import StataExecutor
 
-__all__ = ["StataExecutor", "doctor", "run_do", "run_inline"]
+__all__ = ["StataExecutor"]

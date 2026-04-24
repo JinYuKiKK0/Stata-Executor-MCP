@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "stata-executor": {
+      "command": "D:/Developments/PythonProject/Stata-Executor-MCP/.venv/Scripts/python.exe",
+      "args": ["-m", "stata_executor"],
+      "cwd": "D:/Developments/PythonProject/Stata-Executor-MCP",
+      "env": {
+        "STATA_EXECUTOR_STATA_EXECUTABLE": "D:/Program Files/Stata17/StataMP-64.exe",
+        "STATA_EXECUTOR_EDITION": "mp"
+      }
+    }
+  }
+}

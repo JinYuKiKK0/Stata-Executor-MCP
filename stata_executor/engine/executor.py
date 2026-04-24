@@ -238,15 +238,3 @@ class StataExecutor:
     def _persist_result(self, runtime: ResolvedRuntime, result: ExecutionResult) -> ExecutionResult:
         runtime.result_path.write_text(result.to_json(pretty=True), encoding="utf-8")
         return result
-
-
-def run_do(request: RunDoRequest) -> ExecutionResult:
-    return StataExecutor().run_do(request)
-
-
-def run_inline(request: RunInlineRequest) -> ExecutionResult:
-    return StataExecutor().run_inline(request)
-
-
-def doctor(*, stata_executable: str | None = None, edition: Edition | None = None) -> DoctorResult:
-    return StataExecutor().doctor(stata_executable=stata_executable, edition=edition)
