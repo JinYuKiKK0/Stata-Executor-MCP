@@ -33,7 +33,7 @@ def run_subprocess(runtime: ResolvedRuntime, command: list[str]) -> SubprocessOu
         )
     except subprocess.TimeoutExpired as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        timeout_output = _compose_process_output(_coerce_text(exc.stdout), _coerce_text(exc.stderr))
+        timeout_output = _compose_process_output(exc.stdout, exc.stderr)
         _, process_text = _finalize_process_log(runtime, timeout_output)
         run_text = _read_text(runtime.run_log_path)
         primary_text = run_text or process_text
@@ -99,16 +99,6 @@ def _finalize_process_log(runtime: ResolvedRuntime, process_output: str) -> tupl
 def _compose_process_output(stdout: str | None, stderr: str | None) -> str:
     parts = [chunk.strip() for chunk in (stdout, stderr) if chunk and chunk.strip()]
     return "\n".join(parts)
-
-
-def _coerce_text(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return bytes(value).decode("utf-8", errors="ignore")
-    return str(value)
 
 
 def _normalize_for_dedup(text: str) -> str:

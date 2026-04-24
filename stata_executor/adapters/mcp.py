@@ -9,7 +9,7 @@ from ..contract import RunDoRequest, RunInlineRequest
 from ..engine import StataExecutor
 
 
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_INFO = {
     "name": "stata-executor",
     "title": "Stata Executor",
@@ -50,6 +50,10 @@ class MCPServer:
             return
         if method == "ping":
             self._write_result(request_id, {})
+            return
+        if not self._initialized:
+            if request_id is not None:
+                self._write_error(request_id, -32002, "Server not initialized.")
             return
         if method == "tools/list":
             self._write_result(request_id, {"tools": _tool_definitions()})
