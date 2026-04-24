@@ -34,7 +34,7 @@ def run_subprocess(runtime: ResolvedRuntime, command: list[str]) -> SubprocessOu
     except subprocess.TimeoutExpired as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         timeout_output = _compose_process_output(exc.stdout, exc.stderr)
-        _, process_text = _finalize_process_log(runtime, timeout_output)
+        _, process_text = _finalize_process_log(runtime, timeout_output, should_dedup=False)
         run_text = _read_text(runtime.run_log_path)
         primary_text = run_text or process_text
         return SubprocessOutcome(
@@ -59,7 +59,7 @@ def run_subprocess(runtime: ResolvedRuntime, command: list[str]) -> SubprocessOu
 
     elapsed_ms = int((time.monotonic() - started_at) * 1000)
     process_output = _compose_process_output(completed.stdout, completed.stderr)
-    _, process_text = _finalize_process_log(runtime, process_output)
+    _, process_text = _finalize_process_log(runtime, process_output, should_dedup=completed.returncode == 0)
     run_text = _read_text(runtime.run_log_path)
     primary_text = run_text or process_text
     return SubprocessOutcome(
@@ -72,16 +72,22 @@ def run_subprocess(runtime: ResolvedRuntime, command: list[str]) -> SubprocessOu
     )
 
 
-def _finalize_process_log(runtime: ResolvedRuntime, process_output: str) -> tuple[str | None, str]:
+def _finalize_process_log(
+    runtime: ResolvedRuntime,
+    process_output: str,
+    *,
+    should_dedup: bool,
+) -> tuple[str | None, str]:
     raw_text = _read_text(runtime.raw_process_log_path)
     run_text = _read_text(runtime.run_log_path)
 
     if raw_text:
-        normalized_raw = _normalize_for_dedup(raw_text)
-        normalized_run = _normalize_for_dedup(run_text)
-        if normalized_run and normalized_run in normalized_raw:
-            runtime.raw_process_log_path.unlink(missing_ok=True)
-            return None, ""
+        if should_dedup and run_text:
+            normalized_raw = _normalize_for_dedup(raw_text)
+            normalized_run = _normalize_for_dedup(run_text)
+            if normalized_run and normalized_run in normalized_raw:
+                runtime.raw_process_log_path.unlink(missing_ok=True)
+                return None, ""
 
         if runtime.raw_process_log_path != runtime.process_log_path:
             if runtime.process_log_path.exists():

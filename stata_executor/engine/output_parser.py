@@ -5,12 +5,17 @@ import re
 from ..contract import ErrorKind
 
 _COMMAND_ECHO_PATTERN = re.compile(r"^\.\s*$|^\.\s+\S")
+_COMMAND_LINE_PATTERN = re.compile(r"^\.\s+\S")
 _NUMBERED_LINE_PATTERN = re.compile(r"^\s*\d+\.\s")
 _CONTINUATION_PATTERN = re.compile(r"^>\s")
 _LOG_INFO_PATTERN = re.compile(
     r"^\s*(name:|log:|log type:|opened on:|closed on:|Log file saved to:)",
     re.IGNORECASE,
 )
+_SEPARATOR_PATTERN = re.compile(r"[-+=]+")
+_RC_LINE_PATTERN = re.compile(r"^r\(\d+\);?\s*$")
+_DISPLAY_COMMANDS = frozenset({"display", "di", "dis", "disp"})
+_PREFIX_COMMANDS = frozenset({"quietly", "qui", "noisily", "noi", "capture", "cap"})
 
 
 def parse_exit_code(text: str, fallback: int) -> int:
@@ -52,10 +57,27 @@ def build_bootstrap_summary(text: str) -> str:
 def render_result_text(text: str) -> str:
     if not text:
         return ""
+    raw_lines = strip_agent_rc_trailer(text.splitlines())
+    blocks = extract_empirical_result_blocks(raw_lines)
+    if blocks:
+        return "\n\n".join(blocks)
+    return _render_filtered_fallback(raw_lines)
 
+
+def extract_empirical_result_blocks(lines: list[str]) -> list[str]:
+    blocks: list[str] = []
+    for cmd_word, output in _iter_command_segments(lines):
+        cleaned = _clean_output_inner(output)
+        extracted = _extract_relevant_block(cleaned, cmd_word)
+        if extracted:
+            blocks.append("\n".join(extracted))
+    return blocks
+
+
+def _render_filtered_fallback(lines: list[str]) -> str:
     filtered: list[str] = []
     previous_blank = False
-    for line in strip_agent_rc_trailer(text.splitlines()):
+    for line in lines:
         if _COMMAND_ECHO_PATTERN.match(line):
             continue
         if _NUMBERED_LINE_PATTERN.match(line):
@@ -64,7 +86,6 @@ def render_result_text(text: str) -> str:
             continue
         if _LOG_INFO_PATTERN.match(line):
             continue
-
         is_blank = not line.strip()
         if is_blank:
             if previous_blank:
@@ -72,61 +93,113 @@ def render_result_text(text: str) -> str:
             filtered.append("")
             previous_blank = True
             continue
-
         filtered.append(line.rstrip())
         previous_blank = False
-
     while filtered and not filtered[-1].strip():
         filtered.pop()
-    blocks = extract_empirical_result_blocks(filtered)
-    if blocks:
-        return "\n\n".join(blocks)
     return "\n".join(filtered)
 
 
-def extract_empirical_result_blocks(lines: list[str]) -> list[str]:
-    blocks: list[str] = []
-    index = 0
+def _iter_command_segments(lines: list[str]):
+    n = len(lines)
+    i = 0
+    pre: list[str] = []
+    while i < n and not _COMMAND_LINE_PATTERN.match(lines[i]):
+        pre.append(lines[i])
+        i += 1
+    if pre:
+        yield None, pre
 
-    while index < len(lines):
-        line = lines[index]
+    while i < n:
+        cmd_text = lines[i][2:].rstrip()
+        i += 1
+        while i < n and _CONTINUATION_PATTERN.match(lines[i]):
+            cmd_text += " " + lines[i][2:].strip()
+            i += 1
+        cmd_word = _extract_base_command(cmd_text)
+        output: list[str] = []
+        while i < n and not _COMMAND_LINE_PATTERN.match(lines[i]):
+            output.append(lines[i])
+            i += 1
+        yield cmd_word, output
 
-        if re.search(r"\bregression\b", line, re.IGNORECASE) and "Number of obs" in line:
-            block_lines = [line.rstrip()]
-            index += 1
-            while index < len(lines):
-                current = lines[index].rstrip()
-                block_lines.append(current)
-                if lines[index].startswith("F test that all u_i=0:"):
-                    break
-                index += 1
-            block = "\n".join(block_lines).strip()
-            if block:
-                blocks.append(block)
-            index += 1
+
+def _extract_base_command(cmd_text: str) -> str:
+    for word in cmd_text.strip().split():
+        lowered = word.lower()
+        if lowered in _PREFIX_COMMANDS:
             continue
+        return lowered
+    return ""
 
-        if re.match(r"^\s*Variable\s+\|\s+Obs", line):
-            block_lines = [line.rstrip()]
-            index += 1
-            while index < len(lines):
-                current = lines[index]
-                current_stripped = current.strip()
-                if not current_stripped:
-                    break
-                if "|" in current or re.match(r"^-+[+-]-+$", current_stripped) or re.match(r"^-+$", current_stripped):
-                    block_lines.append(current.rstrip())
-                    index += 1
-                    continue
-                break
-            block = "\n".join(block_lines).strip()
-            if block:
-                blocks.append(block)
+
+def _clean_output_inner(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for line in lines:
+        if _NUMBERED_LINE_PATTERN.match(line):
             continue
+        if _CONTINUATION_PATTERN.match(line):
+            continue
+        if _LOG_INFO_PATTERN.match(line):
+            continue
+        cleaned.append(line)
+    return cleaned
 
-        index += 1
 
-    return blocks
+def _is_table_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if "|" in line:
+        return True
+    if _SEPARATOR_PATTERN.fullmatch(stripped):
+        return True
+    return False
+
+
+def _extract_relevant_block(cleaned: list[str], cmd_word: str | None) -> list[str]:
+    if not cleaned:
+        return []
+
+    table_indices = [i for i, line in enumerate(cleaned) if _is_table_line(line)]
+    if len(table_indices) >= 2:
+        first_idx = table_indices[0]
+        last_idx = table_indices[-1]
+        start = 0
+        while start < first_idx and not cleaned[start].strip():
+            start += 1
+        end = last_idx + 1
+        while end < len(cleaned) and cleaned[end].strip():
+            end += 1
+        return _compact_blanks([line.rstrip() for line in cleaned[start:end]])
+
+    for i, line in enumerate(cleaned):
+        if _RC_LINE_PATTERN.match(line.strip()):
+            start = max(0, i - 5)
+            return [cleaned[j].rstrip() for j in range(start, i + 1) if cleaned[j].strip()]
+
+    if cmd_word in _DISPLAY_COMMANDS:
+        return [line.rstrip() for line in cleaned if line.strip()]
+
+    return []
+
+
+def _compact_blanks(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = not line.strip()
+        if is_blank:
+            if previous_blank:
+                continue
+            result.append("")
+            previous_blank = True
+        else:
+            result.append(line)
+            previous_blank = False
+    while result and not result[-1].strip():
+        result.pop()
+    return result
 
 
 def extract_diagnostics(text: str, exit_code: int) -> tuple[str, str | None, str | None]:

@@ -109,12 +109,12 @@ class StataExecutor:
         try:
             artifacts = collect_artifacts(runtime.working_dir, runtime.artifact_globs, before_snapshot)
         except OSError as exc:
-            if result.status == "failed":
+            if result.status == "succeeded":
                 return self._persist_result(
                     runtime,
                     replace(
                         result,
-                        summary=f"{result.summary} Artifact collection also failed: {exc}",
+                        summary=f"{result.summary} (artifact collection partially failed: {exc})",
                         artifacts=[],
                     ),
                 )
@@ -122,10 +122,7 @@ class StataExecutor:
                 runtime,
                 replace(
                     result,
-                    status="failed",
-                    phase="collect",
-                    error_kind="artifact_collection_error",
-                    summary=f"Artifact collection failed: {exc}",
+                    summary=f"{result.summary} Artifact collection also failed: {exc}",
                     artifacts=[],
                 ),
             )
