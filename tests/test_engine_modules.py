@@ -7,8 +7,10 @@ import textwrap
 import time
 import unittest
 
+from stata_executor.adapters.mcp import _execution_input_schema
 from stata_executor.engine.artifacts import collect_artifacts, snapshot_artifacts
 from stata_executor.engine.output_parser import extract_diagnostics, parse_exit_code, render_result_text
+from stata_executor.engine.preparation import validate_request
 
 
 class OutputParserTests(unittest.TestCase):
@@ -80,6 +82,61 @@ class ArtifactTests(unittest.TestCase):
             artifacts,
             [str(baseline.resolve()), str(created.resolve())],
         )
+
+
+class ValidateRequestTests(unittest.TestCase):
+    def test_rejects_artifact_glob_with_parent_traversal(self) -> None:
+        error = validate_request(timeout_sec=None, artifact_globs=("../secret/**/*",))
+
+        self.assertIsNotNone(error)
+        self.assertIn("..", error)
+
+    def test_rejects_artifact_glob_with_nested_parent_segment(self) -> None:
+        error = validate_request(timeout_sec=None, artifact_globs=("output/../../etc/*",))
+
+        self.assertIsNotNone(error)
+
+    def test_accepts_artifact_glob_with_dot_segment(self) -> None:
+        error = validate_request(timeout_sec=None, artifact_globs=("./output/*.txt",))
+
+        self.assertIsNone(error)
+
+    def test_rejects_working_dir_with_double_quote(self) -> None:
+        error = validate_request(
+            timeout_sec=None,
+            artifact_globs=(),
+            working_dir='/tmp/weird"dir',
+        )
+
+        self.assertIsNotNone(error)
+        self.assertIn("working_dir", error)
+
+    def test_rejects_script_path_with_double_quote(self) -> None:
+        error = validate_request(
+            timeout_sec=None,
+            artifact_globs=(),
+            script_path='bad"name.do',
+        )
+
+        self.assertIsNotNone(error)
+        self.assertIn("script_path", error)
+
+    def test_accepts_paths_without_double_quote(self) -> None:
+        error = validate_request(
+            timeout_sec=None,
+            artifact_globs=(),
+            working_dir="/tmp/ok",
+            script_path="main.do",
+        )
+
+        self.assertIsNone(error)
+
+
+class ExecutionInputSchemaTests(unittest.TestCase):
+    def test_working_dir_requires_non_empty_string(self) -> None:
+        schema = _execution_input_schema(required=["script_path"])
+
+        self.assertEqual(schema["properties"]["working_dir"].get("minLength"), 1)
 
 
 if __name__ == "__main__":

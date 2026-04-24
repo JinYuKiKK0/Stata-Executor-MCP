@@ -6,11 +6,25 @@ import shutil
 from ..runtime import ResolvedRuntime
 
 
-def validate_request(timeout_sec: int | None, artifact_globs: tuple[str, ...]) -> str | None:
+def validate_request(
+    timeout_sec: int | None,
+    artifact_globs: tuple[str, ...],
+    *,
+    working_dir: str | None = None,
+    script_path: str | None = None,
+) -> str | None:
     if timeout_sec is not None and timeout_sec <= 0:
         return "timeout_sec must be a positive integer when provided."
-    if any(Path(pattern).is_absolute() for pattern in artifact_globs):
-        return "artifact_globs must be relative to working_dir."
+    for pattern in artifact_globs:
+        path_obj = Path(pattern)
+        if path_obj.is_absolute():
+            return "artifact_globs must be relative to working_dir."
+        if ".." in path_obj.parts:
+            return "artifact_globs must not traverse parent directories ('..')."
+    if working_dir is not None and '"' in working_dir:
+        return 'working_dir must not contain double-quote characters.'
+    if script_path is not None and '"' in script_path:
+        return 'script_path must not contain double-quote characters.'
     return None
 
 

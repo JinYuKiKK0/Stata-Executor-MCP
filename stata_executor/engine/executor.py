@@ -38,7 +38,12 @@ class StataExecutor:
         )
 
     def run_do(self, request: RunDoRequest) -> ExecutionResult:
-        validation_error = validate_request(request.timeout_sec, request.artifact_globs)
+        validation_error = validate_request(
+            request.timeout_sec,
+            request.artifact_globs,
+            working_dir=request.working_dir,
+            script_path=request.script_path,
+        )
         if validation_error is not None:
             return self._make_failed_result(
                 phase="input",
@@ -73,7 +78,11 @@ class StataExecutor:
         return self._execute_prepared_job(runtime)
 
     def run_inline(self, request: RunInlineRequest) -> ExecutionResult:
-        validation_error = validate_request(request.timeout_sec, request.artifact_globs)
+        validation_error = validate_request(
+            request.timeout_sec,
+            request.artifact_globs,
+            working_dir=request.working_dir,
+        )
         if validation_error is not None:
             return self._make_failed_result(
                 phase="input",

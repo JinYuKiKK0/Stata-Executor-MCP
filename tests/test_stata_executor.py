@@ -89,6 +89,40 @@ class StataExecutorTests(unittest.TestCase):
         result_files = list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))
         self.assertEqual(len(result_files), 1)
 
+    def test_run_do_rejects_double_quoted_script_path(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+
+        result = StataExecutor().run_do(
+            RunDoRequest(
+                script_path='bad"name.do',
+                working_dir=str(root / "wd"),
+                stata_executable=str(fake_exe),
+            )
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.phase, "input")
+        self.assertEqual(result.error_kind, "input_error")
+        self.assertIn("script_path", result.summary)
+
+    def test_run_inline_rejects_double_quoted_working_dir(self) -> None:
+        root = self._workspace_case_dir()
+        fake_exe = self._create_fake_stata_executable(root)
+
+        result = StataExecutor().run_inline(
+            RunInlineRequest(
+                commands="display 1",
+                working_dir=str(root / 'weird"dir'),
+                stata_executable=str(fake_exe),
+            )
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.phase, "input")
+        self.assertEqual(result.error_kind, "input_error")
+        self.assertIn("working_dir", result.summary)
+
     def test_run_inline_reports_parse_error(self) -> None:
         root = self._workspace_case_dir()
         fake_exe = self._create_fake_stata_executable(root)

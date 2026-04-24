@@ -150,7 +150,7 @@ def _build_error(message: str) -> CallToolResult:
 
 def _execution_input_schema(*, required: list[str]) -> dict[str, Any]:
     properties: dict[str, Any] = {
-        "working_dir": {"type": "string"},
+        "working_dir": {"type": "string", "minLength": 1},
         "timeout_sec": {"type": "integer", "minimum": 1},
         "artifact_globs": {"type": "array", "items": {"type": "string"}},
         "env_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
