@@ -34,6 +34,10 @@ ignore = ["E501"]
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"
 
+[tool.ruff.lint.per-file-ignores]
+# tests/test_stata_executor.py 通过 sys.path shim 自举，import 必须在 shim 之后
+"tests/test_stata_executor.py" = ["E402"]
+
 [tool.ruff.format]
 quote-style = "double"
 
