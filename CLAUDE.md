@@ -56,7 +56,3 @@ contract/__init__.py # 对外数据类型（RunDoRequest / ExecutionResult / Doc
 - `tests/test_stata_executor.py` 不依赖真 Stata，用内联生成的 `fake_stata.py` + `fake_stata.cmd` 模拟 Stata 行为，识别 `FAKE_WRITE` / `FAKE_ERROR` / `FAKE_SLEEP` 特殊指令。改执行器或 wrapper 格式时，这个 fake 的 `parse_wrapper` 正则（`log using "..."`、`cd "..."`、`do "..."`）必须仍能匹配。
 - 每个用例都在 `.tmp_test_runs/case_<hex>/` 下操作；`tearDown` 默认清理，`KEEP_TEST_ARTIFACTS=1` 时保留。
 - `tests/live_test/` 下放的是真实 Stata 运行素材（`02_analysis.do` / `panel_final.csv`），只在需要连真 Stata 时用，不要在自动化测试里引用。
-
-## 待修清单
-
-`docs/FIX.md` 按 H/M/L 维护已识别问题（含建议修法、文件行号）。动执行器、output_parser、process_runner 之前先扫一遍这份清单，避免重踩坑；勾一项补一次说明。
