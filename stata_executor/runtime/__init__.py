@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
-from ..contract import ConfigSource, Edition, ExecutorDefaults, RunDoRequest, RunInlineRequest
+from stata_executor.contract import (
+    ConfigSource,
+    Edition,
+    ExecutorDefaults,
+    RunDoRequest,
+    RunInlineRequest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +80,9 @@ def prepare_runtime(request: RunDoRequest | RunInlineRequest) -> ResolvedRuntime
     )
     working_dir = _resolve_working_dir(request.working_dir)
     timeout_sec = request.timeout_sec or config.defaults.timeout_sec
-    artifact_globs = tuple(request.artifact_globs) if request.artifact_globs else config.defaults.artifact_globs
+    artifact_globs = (
+        tuple(request.artifact_globs) if request.artifact_globs else config.defaults.artifact_globs
+    )
     env = dict(os.environ)
     env.update(request.env_overrides)
 

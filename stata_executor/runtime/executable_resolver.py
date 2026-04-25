@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..contract import Edition
-
+from stata_executor.contract import Edition
 
 _EDITION_PREFIX = {
     "mp": "statamp",

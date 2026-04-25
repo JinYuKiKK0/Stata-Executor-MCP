@@ -10,9 +10,8 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
-from ..contract import RunDoRequest, RunInlineRequest
-from ..engine import StataExecutor
-
+from stata_executor.contract import RunDoRequest, RunInlineRequest
+from stata_executor.engine import StataExecutor
 
 INSTRUCTIONS = "Use doctor before run_do or run_inline when configuration is uncertain."
 

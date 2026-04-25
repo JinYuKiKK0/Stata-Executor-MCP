@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import subprocess
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
-from ..runtime import ResolvedRuntime
+from stata_executor.runtime import ResolvedRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +59,9 @@ def run_subprocess(runtime: ResolvedRuntime, command: list[str]) -> SubprocessOu
 
     elapsed_ms = int((time.monotonic() - started_at) * 1000)
     process_output = _compose_process_output(completed.stdout, completed.stderr)
-    _, process_text = _finalize_process_log(runtime, process_output, should_dedup=completed.returncode == 0)
+    _, process_text = _finalize_process_log(
+        runtime, process_output, should_dedup=completed.returncode == 0
+    )
     run_text = _read_text(runtime.run_log_path)
     primary_text = run_text or process_text
     return SubprocessOutcome(

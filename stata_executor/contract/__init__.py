@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import json
+from dataclasses import asdict, dataclass, field
 from typing import Literal
-
 
 Edition = Literal["mp", "se", "be"]
 ExecutionStatus = Literal["succeeded", "failed"]

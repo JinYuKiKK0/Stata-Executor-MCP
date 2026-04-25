@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ..contract import ErrorKind
+from stata_executor.contract import ErrorKind
 
 _COMMAND_ECHO_PATTERN = re.compile(r"^\.\s*$|^\.\s+\S")
 _COMMAND_LINE_PATTERN = re.compile(r"^\.\s+\S")
@@ -152,9 +152,7 @@ def _is_table_line(line: str) -> bool:
         return False
     if "|" in line:
         return True
-    if _SEPARATOR_PATTERN.fullmatch(stripped):
-        return True
-    return False
+    return bool(_SEPARATOR_PATTERN.fullmatch(stripped))
 
 
 def _extract_relevant_block(cleaned: list[str], cmd_word: str | None) -> list[str]:
@@ -250,7 +248,9 @@ def extract_last_command_block(lines: list[str]) -> tuple[int | None, str | None
     return blocks[-1]
 
 
-def extract_error_signature_with_index(lines: list[str], exit_code: int) -> tuple[int | None, str | None]:
+def extract_error_signature_with_index(
+    lines: list[str], exit_code: int
+) -> tuple[int | None, str | None]:
     if exit_code == 0:
         return None, None
 

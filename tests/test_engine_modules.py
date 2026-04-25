@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
 import tempfile
 import textwrap
 import time
 import unittest
+from pathlib import Path
 
 from stata_executor.adapters.mcp import _execution_input_schema
 from stata_executor.engine.artifacts import collect_artifacts, snapshot_artifacts
-from stata_executor.engine.output_parser import extract_diagnostics, parse_exit_code, render_result_text
+from stata_executor.engine.output_parser import (
+    extract_diagnostics,
+    parse_exit_code,
+    render_result_text,
+)
 from stata_executor.engine.preparation import validate_request
 
 

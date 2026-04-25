@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import textwrap
 import unittest
 import uuid
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -177,7 +177,9 @@ class StataExecutorTests(unittest.TestCase):
         self.assertEqual(result.phase, "completed")
         self.assertEqual(result.artifacts, [str((working_dir / "output" / "result.txt").resolve())])
         self.assertIn("wrote", result.result_text)
-        self.assertEqual(len(list((working_dir / ".stata-executor" / "jobs").glob("*/result.json"))), 1)
+        self.assertEqual(
+            len(list((working_dir / ".stata-executor" / "jobs").glob("*/result.json"))), 1
+        )
 
     def test_result_text_keeps_tables_and_drops_execution_noise(self) -> None:
         sample_log = textwrap.dedent(
@@ -261,7 +263,9 @@ class StataExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(result.artifacts, [str((working_dir / "reports" / "partial.txt").resolve())])
+        self.assertEqual(
+            result.artifacts, [str((working_dir / "reports" / "partial.txt").resolve())]
+        )
 
     def test_timeout_terminates_subprocess_and_next_job_is_clean(self) -> None:
         root = self._workspace_case_dir()
@@ -288,10 +292,13 @@ class StataExecutorTests(unittest.TestCase):
 
         self.assertEqual(timed_out.error_kind, "timeout")
         self.assertEqual(succeeded.status, "succeeded")
-        self.assertEqual(len(list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))), 2)
+        self.assertEqual(
+            len(list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))), 2
+        )
 
     def test_mcp_adapter_tools_list_and_call_doctor(self) -> None:
         import asyncio
+
         from stata_executor.adapters.mcp import _call_tool, _list_tools
 
         tools = asyncio.run(_list_tools())
@@ -316,6 +323,7 @@ class StataExecutorTests(unittest.TestCase):
 
     def test_mcp_adapter_run_inline_via_fake_stata(self) -> None:
         import asyncio
+
         from stata_executor.adapters import mcp as mcp_adapter
         from stata_executor.adapters.mcp import _call_tool
 

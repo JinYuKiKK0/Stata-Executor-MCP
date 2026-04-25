@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..contract import ConfigSource, DoctorResult, Edition, ErrorKind, ExecutionPhase, ExecutionResult, RunDoRequest, RunInlineRequest
-from ..runtime import RuntimeBootstrapError, ResolvedRuntime, prepare_runtime
-from ..runtime.executable_resolver import build_stata_command, resolve_stata_executable
+from stata_executor.contract import (
+    ConfigSource,
+    DoctorResult,
+    Edition,
+    ErrorKind,
+    ExecutionPhase,
+    ExecutionResult,
+    RunDoRequest,
+    RunInlineRequest,
+)
+from stata_executor.runtime import ResolvedRuntime, RuntimeBootstrapError, prepare_runtime
+from stata_executor.runtime.executable_resolver import build_stata_command, resolve_stata_executable
+
 from .artifacts import collect_artifacts, snapshot_artifacts
 from .doctor import build_doctor_result
 from .output_parser import (
@@ -17,7 +27,13 @@ from .output_parser import (
     render_result_text,
     strip_agent_rc_trailer_text,
 )
-from .preparation import resolve_user_path, stage_do_input, stage_inline_input, validate_request, write_wrapper_do
+from .preparation import (
+    resolve_user_path,
+    stage_do_input,
+    stage_inline_input,
+    validate_request,
+    write_wrapper_do,
+)
 from .process_runner import run_subprocess
 
 
@@ -116,7 +132,9 @@ class StataExecutor:
         before_snapshot = snapshot_artifacts(runtime.working_dir, runtime.artifact_globs)
         result = self._run_subprocess_job(runtime)
         try:
-            artifacts = collect_artifacts(runtime.working_dir, runtime.artifact_globs, before_snapshot)
+            artifacts = collect_artifacts(
+                runtime.working_dir, runtime.artifact_globs, before_snapshot
+            )
         except OSError as exc:
             if result.status == "succeeded":
                 return self._persist_result(
@@ -150,7 +168,9 @@ class StataExecutor:
         )
 
     def _run_subprocess_job(self, runtime: ResolvedRuntime) -> ExecutionResult:
-        executable = resolve_stata_executable(runtime.config.stata_executable, runtime.config.edition)
+        executable = resolve_stata_executable(
+            runtime.config.stata_executable, runtime.config.edition
+        )
         if executable is None:
             return self._make_failed_result(
                 phase="bootstrap",
@@ -162,7 +182,9 @@ class StataExecutor:
         outcome = run_subprocess(runtime, build_stata_command(executable, runtime.wrapper_do_path))
         if outcome.timed_out:
             result_text = render_result_text(outcome.primary_text)
-            diagnostic_excerpt, error_signature, failed_command = extract_diagnostics(outcome.primary_text, exit_code=124)
+            diagnostic_excerpt, error_signature, failed_command = extract_diagnostics(
+                outcome.primary_text, exit_code=124
+            )
             return self._make_failed_result(
                 phase="execute",
                 exit_code=124,
@@ -187,7 +209,9 @@ class StataExecutor:
 
         exit_code = parse_exit_code(outcome.primary_text, fallback=outcome.returncode)
         result_text = render_result_text(outcome.primary_text)
-        diagnostic_excerpt, error_signature, failed_command = extract_diagnostics(outcome.primary_text, exit_code)
+        diagnostic_excerpt, error_signature, failed_command = extract_diagnostics(
+            outcome.primary_text, exit_code
+        )
 
         if outcome.returncode != 0 and not outcome.primary_text.strip():
             fallback_text = outcome.process_text or outcome.process_output
@@ -202,7 +226,9 @@ class StataExecutor:
                 elapsed_ms=outcome.elapsed_ms,
             )
 
-        error_kind = None if exit_code == 0 else classify_execution_failure(outcome.primary_text, exit_code)
+        error_kind = (
+            None if exit_code == 0 else classify_execution_failure(outcome.primary_text, exit_code)
+        )
         return ExecutionResult(
             status="succeeded" if exit_code == 0 else "failed",
             phase="completed" if exit_code == 0 else "execute",

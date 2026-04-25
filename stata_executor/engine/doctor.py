@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from ..contract import ConfigSource, DoctorResult, Edition, ExecutorDefaults
-from ..runtime import RuntimeBootstrapError, resolve_configuration
-from ..runtime.executable_resolver import resolve_stata_executable
+from stata_executor.contract import ConfigSource, DoctorResult, Edition, ExecutorDefaults
+from stata_executor.runtime import RuntimeBootstrapError, resolve_configuration
+from stata_executor.runtime.executable_resolver import resolve_stata_executable
 
 
 def build_doctor_result(
@@ -15,7 +15,9 @@ def build_doctor_result(
         resolved = resolve_configuration(
             stata_executable=stata_executable,
             edition=edition,
-            source_override=config_source if config_source in {"explicit", "env", "missing"} else None,
+            source_override=config_source
+            if config_source in {"explicit", "env", "missing"}
+            else None,
         )
     except RuntimeBootstrapError as exc:
         return DoctorResult(
@@ -53,7 +55,9 @@ def build_doctor_result(
             stata_executable=resolved.stata_executable,
             edition=resolved.edition,
             defaults=resolved.defaults,
-            errors=[f"Path does not resolve to a usable Stata executable: {resolved.stata_executable}"],
+            errors=[
+                f"Path does not resolve to a usable Stata executable: {resolved.stata_executable}"
+            ],
         )
 
     return DoctorResult(

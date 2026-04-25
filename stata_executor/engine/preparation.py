@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
-from ..runtime import ResolvedRuntime
+from stata_executor.runtime import ResolvedRuntime
 
 
 def validate_request(
@@ -22,9 +22,9 @@ def validate_request(
         if ".." in path_obj.parts:
             return "artifact_globs must not traverse parent directories ('..')."
     if working_dir is not None and '"' in working_dir:
-        return 'working_dir must not contain double-quote characters.'
+        return "working_dir must not contain double-quote characters."
     if script_path is not None and '"' in script_path:
-        return 'script_path must not contain double-quote characters.'
+        return "script_path must not contain double-quote characters."
     return None
 
 
