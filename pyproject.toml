@@ -12,5 +12,47 @@ dependencies = [
     "mcp>=1.27.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.14.0",
+    "pyright>=1.1.380",
+    "pre-commit>=3.7",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["stata_executor"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["stata_executor", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "N", "C4", "TID", "T20", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+include = ["stata_executor", "tests"]
+exclude = ["**/__pycache__"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "warning"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = "none"
+reportArgumentType = "none"
+reportAttributeAccessIssue = "none"
+reportOptionalMemberAccess = "none"
+reportCallIssue = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportMissingParameterType = "none"
+reportUnknownParameterType = "none"

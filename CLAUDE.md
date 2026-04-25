@@ -14,7 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 跑单个测试：`python -m unittest tests.test_stata_executor.StataExecutorTests.test_run_inline_reports_parse_error -v`
 - 保留测试产物以便排查：`KEEP_TEST_ARTIFACTS=1 python -m unittest discover -s tests -v`（产物位于 `.tmp_test_runs/`）
 
-无 lint / format 工具链配置，不要额外引入。
+## Lint / Format 工具链
+
+与 csmar-mcp 对齐：ruff + pyright(strict)，统一入口 `scripts/check.py`，本地由 pre-commit framework 拉起，远端由 `.github/workflows/lint.yml` 在 push / PR 上兜底。
+
+- 装开发依赖并激活钩子（一次性）：`uv sync --group dev && uv run pre-commit install && uv run pre-commit install --hook-type pre-push`
+- 本地手动跑：`uv run python scripts/check.py`（默认 check-only；`--fix` 跑 auto-fix + format 回写）
+- pre-commit 钩子跑 `--fix` 模式，pre-push 钩子跑 check-only，配置见 `.pre-commit-config.yaml`
 
 ## 配置注入
 
