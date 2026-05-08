@@ -37,23 +37,6 @@ def classify_execution_failure(text: str, exit_code: int) -> ErrorKind:
     return "stata_runtime_error"
 
 
-def build_execution_summary(text: str, exit_code: int) -> str:
-    if exit_code == 0:
-        return "Stata do-file completed successfully."
-
-    error_signature = extract_error_signature(text, exit_code)
-    if error_signature:
-        return f"Stata execution failed with exit_code={exit_code}: {error_signature}"
-    return f"Stata execution failed with exit_code={exit_code}."
-
-
-def build_bootstrap_summary(text: str) -> str:
-    stripped = [line.strip() for line in text.splitlines() if line.strip()]
-    if stripped:
-        return f"Stata subprocess bootstrap failed: {stripped[-1]}"
-    return "Stata subprocess bootstrap failed before any execution log was created."
-
-
 def render_result_text(text: str) -> str:
     if not text:
         return ""
@@ -200,15 +183,15 @@ def _compact_blanks(lines: list[str]) -> list[str]:
     return result
 
 
-def extract_diagnostics(text: str, exit_code: int) -> tuple[str, str | None, str | None]:
+def extract_diagnostics(text: str, exit_code: int) -> str:
     if not text:
-        return "", None, None
+        return ""
     if exit_code == 0:
-        return "", None, None
+        return ""
 
     lines = text.splitlines()
-    command_start, failed_command = extract_last_command_block(lines)
-    error_index, error_signature = extract_error_signature_with_index(lines, exit_code)
+    command_start, _ = extract_last_command_block(lines)
+    error_index, _ = extract_error_signature_with_index(lines, exit_code)
 
     if command_start is not None and error_index is not None and command_start <= error_index:
         excerpt_start = command_start
@@ -220,8 +203,7 @@ def extract_diagnostics(text: str, exit_code: int) -> tuple[str, str | None, str
         excerpt_start = 0
 
     excerpt_lines = strip_agent_rc_trailer(lines[excerpt_start:])
-    excerpt = "\n".join(excerpt_lines).strip()
-    return excerpt, error_signature, failed_command
+    return "\n".join(excerpt_lines).strip()
 
 
 def extract_last_command_block(lines: list[str]) -> tuple[int | None, str | None]:
@@ -272,19 +254,6 @@ def extract_error_signature_with_index(
             continue
         return index, stripped
     return None, None
-
-
-def extract_error_signature(text: str, exit_code: int) -> str | None:
-    _, signature = extract_error_signature_with_index(text.splitlines(), exit_code)
-    return signature
-
-
-def extract_last_meaningful_line(text: str) -> str | None:
-    for raw_line in reversed(text.splitlines()):
-        stripped = raw_line.strip()
-        if stripped:
-            return stripped
-    return None
 
 
 def strip_agent_rc_trailer(lines: list[str]) -> list[str]:

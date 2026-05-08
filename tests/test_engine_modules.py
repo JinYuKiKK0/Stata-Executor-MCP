@@ -35,10 +35,10 @@ class OutputParserTests(unittest.TestCase):
             """
         ).strip()
 
-        excerpt, signature, failed_command = extract_diagnostics(text, exit_code=111)
+        excerpt = extract_diagnostics(text, exit_code=111)
 
-        self.assertEqual(signature, "variable x not found")
-        self.assertEqual(failed_command, "regress y x")
+        self.assertIn(". regress y x", excerpt)
+        self.assertIn("variable x not found", excerpt)
         self.assertNotIn("__AGENT_RC__", excerpt)
 
     def test_render_result_text_filters_noise_and_keeps_table(self) -> None:

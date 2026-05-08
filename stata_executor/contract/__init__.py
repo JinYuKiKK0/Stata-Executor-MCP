@@ -6,7 +6,6 @@ from typing import Literal
 
 Edition = Literal["mp", "se", "be"]
 ExecutionStatus = Literal["succeeded", "failed"]
-ExecutionPhase = Literal["bootstrap", "input", "execute", "collect", "completed"]
 ErrorKind = Literal[
     "bootstrap_error",
     "input_error",
@@ -52,16 +51,10 @@ class RunInlineRequest:
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
     status: ExecutionStatus
-    phase: ExecutionPhase
-    exit_code: int
     error_kind: ErrorKind | None
-    summary: str
     result_text: str
     diagnostic_excerpt: str
-    error_signature: str | None
-    failed_command: str | None
     artifacts: list[str]
-    elapsed_ms: int
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -76,13 +69,6 @@ class ExecutionResult:
 @dataclass(frozen=True, slots=True)
 class DoctorResult:
     ready: bool
-    summary: str
-    config_path: str
-    config_exists: bool
-    config_source: ConfigSource
-    stata_executable: str | None
-    edition: Edition | None
-    defaults: ExecutorDefaults
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:

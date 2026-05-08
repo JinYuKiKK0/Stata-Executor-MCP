@@ -34,8 +34,7 @@ class StataExecutorTests(unittest.TestCase):
         result = StataExecutor().doctor()
 
         self.assertFalse(result.ready)
-        self.assertEqual(result.config_source, "missing")
-        self.assertIn("No Stata executable configured", result.summary)
+        self.assertTrue(any("stata_executable" in e for e in result.errors))
 
     def test_doctor_uses_explicit_config_and_resolves_executable(self) -> None:
         root = self._workspace_case_dir()
@@ -43,9 +42,7 @@ class StataExecutorTests(unittest.TestCase):
         result = StataExecutor().doctor(stata_executable=str(fake_exe), edition="mp")
 
         self.assertTrue(result.ready)
-        self.assertEqual(result.config_source, "explicit")
-        self.assertTrue(result.stata_executable.endswith("fake_stata.cmd"))
-        self.assertEqual(result.defaults.timeout_sec, 120)
+        self.assertEqual(result.errors, [])
 
     def test_executable_resolution_prefers_headless_candidate(self) -> None:
         root = self._workspace_case_dir()
@@ -84,7 +81,6 @@ class StataExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(result.phase, "input")
         self.assertEqual(result.error_kind, "input_error")
         result_files = list((root / "wd" / ".stata-executor" / "jobs").glob("*/result.json"))
         self.assertEqual(len(result_files), 1)
@@ -102,9 +98,8 @@ class StataExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(result.phase, "input")
         self.assertEqual(result.error_kind, "input_error")
-        self.assertIn("script_path", result.summary)
+        self.assertIn("script_path", result.diagnostic_excerpt)
 
     def test_run_inline_rejects_double_quoted_working_dir(self) -> None:
         root = self._workspace_case_dir()
@@ -119,9 +114,8 @@ class StataExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(result.phase, "input")
         self.assertEqual(result.error_kind, "input_error")
-        self.assertIn("working_dir", result.summary)
+        self.assertIn("working_dir", result.diagnostic_excerpt)
 
     def test_run_inline_reports_parse_error(self) -> None:
         root = self._workspace_case_dir()
@@ -137,7 +131,7 @@ class StataExecutorTests(unittest.TestCase):
 
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.error_kind, "stata_parse_or_command_error")
-        self.assertIn("command foo is unrecognized", result.summary)
+        self.assertIn("command foo is unrecognized", result.diagnostic_excerpt)
         self.assertIn("command foo is unrecognized", result.result_text)
 
     def test_failed_job_returns_mechanical_diagnostics(self) -> None:
@@ -152,11 +146,10 @@ class StataExecutorTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result.error_signature, "variable mpg not found")
-        self.assertEqual(result.failed_command, "regress price weight mpg")
         self.assertNotIn(". regress price weight mpg", result.result_text)
         self.assertIn("variable mpg not found", result.result_text)
         self.assertIn(". regress price weight mpg", result.diagnostic_excerpt)
+        self.assertIn("variable mpg not found", result.diagnostic_excerpt)
         self.assertNotIn("__AGENT_RC__", result.diagnostic_excerpt)
 
     def test_success_job_collects_artifacts(self) -> None:
@@ -174,7 +167,6 @@ class StataExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "succeeded")
-        self.assertEqual(result.phase, "completed")
         self.assertEqual(result.artifacts, [str((working_dir / "output" / "result.txt").resolve())])
         self.assertIn("wrote", result.result_text)
         self.assertEqual(
@@ -306,20 +298,7 @@ class StataExecutorTests(unittest.TestCase):
 
         result = asyncio.run(_call_tool("doctor", {}))
         self.assertFalse(result.isError)
-        self.assertEqual(
-            set(result.structuredContent.keys()),
-            {
-                "ready",
-                "summary",
-                "config_path",
-                "config_exists",
-                "config_source",
-                "stata_executable",
-                "edition",
-                "defaults",
-                "errors",
-            },
-        )
+        self.assertEqual(set(result.structuredContent.keys()), {"ready", "errors"})
 
     def test_mcp_adapter_run_inline_via_fake_stata(self) -> None:
         import asyncio

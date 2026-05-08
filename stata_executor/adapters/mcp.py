@@ -96,7 +96,6 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
         result = _executor.doctor(
             stata_executable=_env.stata_executable,
             edition=_env.edition,
-            config_source="env" if _env.stata_executable else "missing",
         )
         return _build_result(result.to_dict(), is_error=False)
 
@@ -166,29 +165,17 @@ def _execution_output_schema() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "status": {"type": "string", "enum": ["succeeded", "failed"]},
-            "phase": {"type": "string"},
-            "exit_code": {"type": "integer"},
             "error_kind": {"type": ["string", "null"]},
-            "summary": {"type": "string"},
             "result_text": {"type": "string"},
             "diagnostic_excerpt": {"type": "string"},
-            "error_signature": {"type": ["string", "null"]},
-            "failed_command": {"type": ["string", "null"]},
             "artifacts": {"type": "array", "items": {"type": "string"}},
-            "elapsed_ms": {"type": "integer"},
         },
         "required": [
             "status",
-            "phase",
-            "exit_code",
             "error_kind",
-            "summary",
             "result_text",
             "diagnostic_excerpt",
-            "error_signature",
-            "failed_command",
             "artifacts",
-            "elapsed_ms",
         ],
     }
 
@@ -198,33 +185,9 @@ def _doctor_output_schema() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "ready": {"type": "boolean"},
-            "summary": {"type": "string"},
-            "config_path": {"type": "string"},
-            "config_exists": {"type": "boolean"},
-            "config_source": {"type": "string", "enum": ["explicit", "env", "missing"]},
-            "stata_executable": {"type": ["string", "null"]},
-            "edition": {"type": ["string", "null"]},
-            "defaults": {
-                "type": "object",
-                "properties": {
-                    "timeout_sec": {"type": "integer"},
-                    "artifact_globs": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["timeout_sec", "artifact_globs"],
-            },
             "errors": {"type": "array", "items": {"type": "string"}},
         },
-        "required": [
-            "ready",
-            "summary",
-            "config_path",
-            "config_exists",
-            "config_source",
-            "stata_executable",
-            "edition",
-            "defaults",
-            "errors",
-        ],
+        "required": ["ready", "errors"],
     }
 
 

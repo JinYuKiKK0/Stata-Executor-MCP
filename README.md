@@ -48,16 +48,15 @@ uv sync
 `run_do` / `run_inline` 返回的结构化内容 (`structuredContent`) 包含以下字段：
 
 - `status`: 执行状态 (`succeeded`, `failed`)
-- `phase`: 发生的阶段
-- `exit_code`: 退出码
-- `error_kind`: 错误分类
-- `summary`: 执行摘要
+- `error_kind`: 失败时的错误分类(`bootstrap_error` / `input_error` / `timeout` / `stata_parse_or_command_error` / `stata_runtime_error` / `artifact_collection_error`),成功时为 `null`
 - `result_text`: 过滤命令回显后的完整结果正文，面向模型直接消费
-- `diagnostic_excerpt`: 关键诊断摘要
-- `error_signature`: 错误特征码 (如 r(198))
-- `failed_command`: 导致失败的命令
-- `artifacts`: 生成的产物列表
-- `elapsed_ms`: 耗时（毫秒）
+- `diagnostic_excerpt`: 失败时围绕末次命令与错误行的诊断片段
+- `artifacts`: 本次执行新增或变更的产物绝对路径列表
+
+`doctor` 返回:
+
+- `ready`: 配置与可执行文件是否就绪
+- `errors`: 未就绪时的错误清单(就绪时为空列表)
 
 执行失败时响应的 `isError=true` 且仍然返回完整 `structuredContent`，便于 Agent 基于诊断字段进行恢复。
 
